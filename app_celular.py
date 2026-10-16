@@ -143,7 +143,7 @@ st.title("💰 Meu Controle")
 
 menu = st.radio(
     "Navegação",
-    ["➕ Nova Despesa", "💳 Faturas dos Cartões", "📊 Gráficos por Categoria"],
+    ["➕ Novas Despesas", "💳 Faturas dos Cartões", "📊 Gráficos por Categoria"],
     horizontal=True,
     label_visibility="collapsed",
 )
