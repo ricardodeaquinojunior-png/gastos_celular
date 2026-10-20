@@ -1,9 +1,9 @@
-from datetime import datetime, date, timedelta
-from dateutil.relativedelta import relativedelta
 import calendar
-import psycopg2
-import streamlit as st
+from datetime import date, datetime, timedelta
+from dateutil.relativedelta import relativedelta
+import libsql
 import matplotlib.pyplot as plt
+import streamlit as st
 
 # Configuração da página para dispositivos móveis
 st.set_page_config(
@@ -28,24 +28,19 @@ meses_pt = {
 }
 
 
-# Função de conexão inteligente (com fallback direto para a sua string de conexão)
+# Função de conexão inteligente com o Turso
 def conectar_banco():
   try:
-    if "supabase" in st.secrets:
-      db_conf = st.secrets["supabase"]
-      return psycopg2.connect(
-          host=db_conf["host"],
-          database=db_conf["database"],
-          user=db_conf["user"],
-          password=db_conf["password"],
-          port=db_conf["port"],
-      )
+    if "turso" in st.secrets:
+      db_conf = st.secrets["turso"]
+      return libsql.connect(db_conf["url"], auth_token=db_conf["auth_token"])
   except Exception:
     pass
 
-  # Conexão direta padrão para funcionamento local imediato
-  DATABASE_URL = "postgresql://postgres:gPAc6c9P+_ZV2u$@db.vihsucqqzeaestnynffz.supabase.co:5432/postgres"
-  return psycopg2.connect(DATABASE_URL)
+  # Conexão direta padrão com o Turso para funcionamento local imediato
+  TURSO_URL = "https://controlegastos-jesraj.aws-us-east-1.turso.io"
+  TURSO_TOKEN = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3OTIxNzI0NzEsImlkIjoiMDFhMTQ1YmUtZTAwMS03MWY5LTlmMWUtZmFkYTJkZDhhNmEyIiwia2lkIjoiODRpRll2SGxCQ01qVGxyWXVMR0xfUUtWY3E0N1dmWUVxRUxBSTdSNkFqQSIsInJpZCI6IjU1NmQ3ZmUxLTRjZTAtNGZlZi1hMTIzLTEzYzM0ODY5NDFhYiJ9.KqPYdc5g76qkjqBOqhkP3aF3PoLqhIUugJZG8-70X7_nuUv0L60yNxCmbyGNnUXBOeqCJ1_Gx039rl-dDloPCA"
+  return libsql.connect(TURSO_URL, auth_token=TURSO_TOKEN)
 
 
 # --- Funções de Consulta ao Banco ---
@@ -86,7 +81,9 @@ def carregar_categorias():
   try:
     conn = conectar_banco()
     cursor = conn.cursor()
-    cursor.execute("SELECT id_categoria, descricao FROM categorias ORDER BY descricao;")
+    cursor.execute(
+        "SELECT id_categoria, descricao FROM categorias ORDER BY descricao;"
+    )
     res = cursor.fetchall()
     cursor.close()
     conn.close()
@@ -107,7 +104,8 @@ def carregar_subcategorias(id_categoria):
     conn = conectar_banco()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT id_subcategoria, descricao FROM subcategorias WHERE id_categoria = %s ORDER BY descricao;",
+        "SELECT id_subcategoria, descricao FROM subcategorias WHERE"
+        " id_categoria = ? ORDER BY descricao;",
         (id_categoria,),
     )
     res = cursor.fetchall()
@@ -187,14 +185,12 @@ if menu == "💳 Faturas dos Cartões":
     try:
       conn = conectar_banco()
       cursor = conn.cursor()
-      cursor.execute(
-          """
+      cursor.execute("""
                 SELECT l.valor, l.data_lancamento, l.descricao, c.nome, c.dia_fechamento 
                 FROM lancamentos l
                 JOIN cartoes c ON l.id_cartao = c.id
                 WHERE l.id_cartao IS NOT NULL;
-            """
-      )
+            """)
       todos_lanc_cartoes = cursor.fetchall()
       cursor.close()
       conn.close()
@@ -211,7 +207,14 @@ if menu == "💳 Faturas dos Cartões":
           )
           if not ldata:
             continue
-          d_date = ldata.date() if hasattr(ldata, "date") else ldata
+          if isinstance(ldata, str):
+            try:
+              d_date = datetime.strptime(ldata.split()[0], "%Y-%m-%d").date()
+            except ValueError:
+              continue
+          else:
+            d_date = ldata.date() if hasattr(ldata, "date") else ldata
+
           fechamento = c_fech or 24
 
           inicio_ciclo, fim_ciclo = calcular_ciclo_fatura(d_date, fechamento)
@@ -247,13 +250,14 @@ if menu == "💳 Faturas dos Cartões":
                   reverse=True,
               )
               for data_item, desc_item, val_item in itens_ordenados:
-                data_item_fmt = (
-                    datetime.strptime(str(data_item), "%Y-%m-%d").strftime(
-                        "%d/%m/%Y"
-                    )
-                    if data_item
-                    else ""
-                )
+                if isinstance(data_item, str):
+                  data_item_fmt = data_item.split()[0]
+                else:
+                  data_item_fmt = (
+                      data_item.strftime("%d/%m/%Y")
+                      if hasattr(data_item, "strftime")
+                      else str(data_item)
+                  )
                 st.markdown(
                     f"**{data_item_fmt}** - {desc_item}: `R$"
                     f" {float(val_item or 0):,.2f}`"
@@ -393,6 +397,8 @@ elif menu == "➕ Nova Despesa":
       st.error("O valor da despesa deve ser maior que zero.")
     else:
       try:
+        import uuid
+
         id_cartao = cartoes_dict[cartao_selecionado]["id"]
         conn = conectar_banco()
         cursor = conn.cursor()
@@ -403,12 +409,14 @@ elif menu == "➕ Nova Despesa":
           for i in range(qtd_parcelas):
             data_parcela = data_compra + relativedelta(months=i)
             desc_parcela = f"{desc_base} ({i+1}/{qtd_parcelas})"
+            novo_id = str(uuid.uuid4())
             cursor.execute(
                 """
-                            INSERT INTO lancamentos (tipo, valor, recebido, data_lancamento, descricao, id_categoria, id_subcategoria, id_cartao, repeticoes)
-                            VALUES ('Despesa', %s, FALSE, %s, %s, %s, %s, %s, %s);
+                            INSERT INTO lancamentos (id, tipo, valor, recebido, data_lancamento, descricao, id_categoria, id_subcategoria, id_cartao, repeticoes)
+                            VALUES (?, 'Despesa', ?, 0, ?, ?, ?, ?, ?, ?);
                         """,
                 (
+                    novo_id,
                     valor_parcela,
                     data_parcela.strftime("%Y-%m-%d"),
                     desc_parcela,
@@ -422,12 +430,14 @@ elif menu == "➕ Nova Despesa":
               f"Despesa parcelada em {qtd_parcelas}x cadastrada com sucesso!"
           )
         else:
+          novo_id = str(uuid.uuid4())
           cursor.execute(
               """
-                        INSERT INTO lancamentos (tipo, valor, recebido, data_lancamento, descricao, id_categoria, id_subcategoria, id_cartao, repeticoes)
-                        VALUES ('Despesa', %s, FALSE, %s, %s, %s, %s, %s, %s);
+                        INSERT INTO lancamentos (id, tipo, valor, recebido, data_lancamento, descricao, id_categoria, id_subcategoria, id_cartao, repeticoes)
+                        VALUES (?, 'Despesa', ?, 0, ?, ?, ?, ?, ?, ?);
                     """,
               (
+                  novo_id,
                   valor,
                   data_compra.strftime("%Y-%m-%d"),
                   desc_base,
@@ -491,7 +501,7 @@ elif menu == "📊 Gráficos por Categoria":
       cursor_c = conn_c.cursor()
       cursor_c.execute(
           "SELECT MIN(data_lancamento), MAX(data_lancamento) FROM lancamentos"
-          " WHERE id_cartao = %s;",
+          " WHERE id_cartao = ?;",
           (cartao_id,),
       )
       res_c = cursor_c.fetchone()
@@ -501,6 +511,11 @@ elif menu == "📊 Gráficos por Categoria":
       def para_date(val):
         if not val:
           return None
+        if isinstance(val, str):
+          try:
+            return datetime.strptime(val.split()[0], "%Y-%m-%d").date()
+          except ValueError:
+            return None
         if hasattr(val, "date"):
           return val.date()
         return val
@@ -515,6 +530,10 @@ elif menu == "📊 Gráficos por Categoria":
           if res_c and res_c[1]
           else date.today() + relativedelta(months=6)
       )
+      if not min_data:
+        min_data = date.today() - relativedelta(months=3)
+      if not max_data:
+        max_data = date.today() + relativedelta(months=6)
 
       curr_date = date(min_data.year, min_data.month, 1)
       end_date = date(max_data.year, max_data.month, 1) + relativedelta(
@@ -527,8 +546,7 @@ elif menu == "📊 Gráficos por Categoria":
         max_d_fim = calendar.monthrange(r_ano, r_mes)[1]
         data_fim = date(r_ano, r_mes, min(fechamento_dia, max_d_fim))
         data_ini = data_fim - relativedelta(months=1) + relativedelta(days=1)
-        
-        # Formatação limpa segura baseada no dicionário numérico
+
         mes_nome = meses_pt.get(data_fim.month, str(data_fim.month))
         rotulo = (
             f"Fatura {mes_nome}/{data_fim.year} ({data_ini.strftime('%d/%m/%Y')}"
@@ -569,12 +587,20 @@ elif menu == "📊 Gráficos por Categoria":
                 SELECT c.id_categoria, c.descricao, SUM(l.valor) 
                 FROM lancamentos l
                 JOIN categorias c ON l.id_categoria = c.id_categoria
-                WHERE l.tipo = 'Despesa' AND l.id_cartao = %s 
-                  AND l.data_lancamento >= %s AND l.data_lancamento <= %s
+                WHERE l.tipo = 'Despesa' AND l.id_cartao = ? 
+                  AND l.data_lancamento >= ? AND l.data_lancamento <= ?
                 GROUP BY c.id_categoria, c.descricao 
                 ORDER BY SUM(l.valor) DESC;
             """,
-          (cartao_id, d_ini, d_fim),
+          (
+              cartao_id,
+              d_ini.strftime("%Y-%m-%d")
+              if hasattr(d_ini, "strftime")
+              else str(d_ini),
+              d_fim.strftime("%Y-%m-%d")
+              if hasattr(d_fim, "strftime")
+              else str(d_fim),
+          ),
       )
       dados_cat = cursor_db.fetchall()
 
@@ -586,7 +612,7 @@ elif menu == "📊 Gráficos por Categoria":
                 FROM lancamentos l
                 JOIN categorias c ON l.id_categoria = c.id_categoria
                 WHERE l.tipo = 'Despesa' AND l.id_cartao IS NULL 
-                  AND TO_CHAR(l.data_lancamento, 'YYYY-MM') = %s
+                  AND SUBSTR(l.data_lancamento, 1, 7) = ?
                 GROUP BY c.id_categoria, c.descricao 
                 ORDER BY SUM(l.valor) DESC;
             """,
@@ -612,11 +638,19 @@ elif menu == "📊 Gráficos por Categoria":
                     SELECT c.id_categoria, c.descricao, SUM(l.valor) 
                     FROM lancamentos l
                     JOIN categorias c ON l.id_categoria = c.id_categoria
-                    WHERE l.tipo = 'Despesa' AND l.id_cartao = %s 
-                      AND l.data_lancamento >= %s AND l.data_lancamento <= %s
+                    WHERE l.tipo = 'Despesa' AND l.id_cartao = ? 
+                      AND l.data_lancamento >= ? AND l.data_lancamento <= ?
                     GROUP BY c.id_categoria, c.descricao;
                 """,
-            (cid, d_ini, d_fim),
+            (
+                cid,
+                d_ini.strftime("%Y-%m-%d")
+                if hasattr(d_ini, "strftime")
+                else str(d_ini),
+                d_fim.strftime("%Y-%m-%d")
+                if hasattr(d_fim, "strftime")
+                else str(d_fim),
+            ),
         )
         for cat_id, cat_desc, val in cursor_db.fetchall():
           v_f = float(val or 0)
@@ -631,7 +665,7 @@ elif menu == "📊 Gráficos por Categoria":
                 FROM lancamentos l
                 JOIN categorias c ON l.id_categoria = c.id_categoria
                 WHERE l.tipo = 'Despesa' AND l.id_cartao IS NULL 
-                  AND TO_CHAR(l.data_lancamento, 'YYYY-MM') = %s
+                  AND SUBSTR(l.data_lancamento, 1, 7) = ?
                 GROUP BY c.id_categoria, c.descricao;
             """,
           (mes_ano_str,),
@@ -653,7 +687,6 @@ elif menu == "📊 Gráficos por Categoria":
       valores_cat = [float(item[2]) for item in dados_cat]
       soma_total = sum(valores_cat)
 
-      # Texto informativo do total
       valor_fmt = (
           f"R$ {soma_total:,.2f}"
           .replace(",", "X")
@@ -665,15 +698,12 @@ elif menu == "📊 Gráficos por Categoria":
             f"💳 Total das despesas do cartão **{sel_cartao}**: **{valor_fmt}**"
         )
       elif sel_cartao == "Despesas Gerais (Sem Cartão)":
-        st.info(
-            f"📂 Total das despesas gerais no período: **{valor_fmt}**"
-        )
+        st.info(f"📂 Total das despesas gerais no período: **{valor_fmt}**")
       else:
         st.info(
             f"📊 Total geral de gastos (cartões + gerais): **{valor_fmt}**"
         )
 
-      # Gráfico 1: Barras Verticais (Categorias)
       fig1, ax1 = plt.subplots(figsize=(8, 4.5))
       bars1 = ax1.bar(
           cats,
@@ -707,7 +737,6 @@ elif menu == "📊 Gráficos por Categoria":
       fig1.tight_layout()
       st.pyplot(fig1)
 
-      # Seleção interativa da Categoria para ver as Subcategorias no celular
       nomes_cats_disponiveis = [item[1] for item in dados_cat]
       cat_escolhida_nome = st.selectbox(
           "🔍 Escolha a Categoria para ver as Subcategorias",
@@ -717,7 +746,6 @@ elif menu == "📊 Gráficos por Categoria":
           item[0] for item in dados_cat if item[1] == cat_escolhida_nome
       )
 
-      # Buscar Subcategorias
       dados_sub = []
       if is_cartao and cartao_id:
         _, d_ini, d_fim = ciclo_selecionado
@@ -726,11 +754,20 @@ elif menu == "📊 Gráficos por Categoria":
                     SELECT s.descricao, SUM(l.valor) 
                     FROM lancamentos l
                     JOIN subcategorias s ON l.id_subcategoria = s.id_subcategoria
-                    WHERE l.tipo = 'Despesa' AND l.id_cartao = %s AND l.id_categoria = %s
-                      AND l.data_lancamento >= %s AND l.data_lancamento <= %s
+                    WHERE l.tipo = 'Despesa' AND l.id_cartao = ? AND l.id_categoria = ?
+                      AND l.data_lancamento >= ? AND l.data_lancamento <= ?
                     GROUP BY s.descricao ORDER BY SUM(l.valor) ASC;
                 """,
-            (cartao_id, cat_escolhida_id, d_ini, d_fim),
+            (
+                cartao_id,
+                cat_escolhida_id,
+                d_ini.strftime("%Y-%m-%d")
+                if hasattr(d_ini, "strftime")
+                else str(d_ini),
+                d_fim.strftime("%Y-%m-%d")
+                if hasattr(d_fim, "strftime")
+                else str(d_fim),
+            ),
         )
         dados_sub = cursor_db.fetchall()
       elif sel_cartao == "Despesas Gerais (Sem Cartão)":
@@ -740,8 +777,8 @@ elif menu == "📊 Gráficos por Categoria":
                     SELECT s.descricao, SUM(l.valor) 
                     FROM lancamentos l
                     JOIN subcategorias s ON l.id_subcategoria = s.id_subcategoria
-                    WHERE l.tipo = 'Despesa' AND l.id_cartao IS NULL AND l.id_categoria = %s
-                      AND TO_CHAR(l.data_lancamento, 'YYYY-MM') = %s
+                    WHERE l.tipo = 'Despesa' AND l.id_cartao IS NULL AND l.id_categoria = ?
+                      AND SUBSTR(l.data_lancamento, 1, 7) = ?
                     GROUP BY s.descricao ORDER BY SUM(l.valor) ASC;
                 """,
             (cat_escolhida_id, mes_ano_str),
@@ -765,11 +802,20 @@ elif menu == "📊 Gráficos por Categoria":
                         SELECT s.descricao, SUM(l.valor) 
                         FROM lancamentos l
                         JOIN subcategorias s ON l.id_subcategoria = s.id_subcategoria
-                        WHERE l.tipo = 'Despesa' AND l.id_cartao = %s AND l.id_categoria = %s
-                          AND l.data_lancamento >= %s AND l.data_lancamento <= %s
+                        WHERE l.tipo = 'Despesa' AND l.id_cartao = ? AND l.id_categoria = ?
+                          AND l.data_lancamento >= ? AND l.data_lancamento <= ?
                         GROUP BY s.descricao;
                     """,
-              (cid, cat_escolhida_id, d_ini, d_fim),
+              (
+                  cid,
+                  cat_escolhida_id,
+                  d_ini.strftime("%Y-%m-%d")
+                  if hasattr(d_ini, "strftime")
+                  else str(d_ini),
+                  d_fim.strftime("%Y-%m-%d")
+                  if hasattr(d_fim, "strftime")
+                  else str(d_fim),
+              ),
           )
           for sub_desc, val in cursor_db.fetchall():
             v_f = float(val or 0)
@@ -783,8 +829,8 @@ elif menu == "📊 Gráficos por Categoria":
                     SELECT s.descricao, SUM(l.valor) 
                     FROM lancamentos l
                     JOIN subcategorias s ON l.id_subcategoria = s.id_subcategoria
-                    WHERE l.tipo = 'Despesa' AND l.id_cartao IS NULL AND l.id_categoria = %s
-                      AND TO_CHAR(l.data_lancamento, 'YYYY-MM') = %s
+                    WHERE l.tipo = 'Despesa' AND l.id_cartao IS NULL AND l.id_categoria = ?
+                      AND SUBSTR(l.data_lancamento, 1, 7) = ?
                     GROUP BY s.descricao;
                 """,
             (cat_escolhida_id, mes_ano_str),
@@ -805,7 +851,6 @@ elif menu == "📊 Gráficos por Categoria":
         subs = [item[0] for item in dados_sub]
         valores_sub = [float(item[1]) for item in dados_sub]
 
-        # Gráfico 2: Barras Horizontais (Subcategorias)
         fig2, ax2 = plt.subplots(figsize=(8, 4))
         bars2 = ax2.barh(subs, valores_sub, color="#805AD5")
         ax2.set_title(
