@@ -1,4 +1,4 @@
 streamlit
-libsql-client
+libsql
 python-dateutil
 matplotlib
