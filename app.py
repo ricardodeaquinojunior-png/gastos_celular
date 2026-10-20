@@ -507,7 +507,7 @@ elif menu == "💵 Lançamentos Contas":
     st.session_state.val_num_conta = 0.0
 
 
-  def fmt_valor_conta():
+  def formatar_moeda_conta_input():
     digitos = "".join(
         filter(str.isdigit, st.session_state.get("raw_valor_conta", ""))
     )
@@ -516,6 +516,7 @@ elif menu == "💵 Lançamentos Contas":
       st.session_state.val_num_conta = 0.0
       st.session_state.raw_valor_conta = ""
       return
+
     val_int = int(digitos)
     val_float = val_int / 100.0
     st.session_state.val_num_conta = val_float
@@ -533,8 +534,8 @@ elif menu == "💵 Lançamentos Contas":
       f"Valor da {tipo_lanc} (R$)",
       value=st.session_state.val_fmt_conta,
       key="raw_valor_conta",
-      on_change=fmt_valor_conta,
-      placeholder="Digite apenas números...",
+      on_change=formatar_moeda_conta_input,
+      placeholder="Digite apenas os números...",
   )
   val_lancamento = st.session_state.val_num_conta
 
@@ -674,7 +675,7 @@ elif menu == "💵 Lançamentos Contas":
           )
           st.success("✔ Transferência cadastrada com sucesso!")
         else:
-          for i in range(int(repetirer_vezes if "repetirer_vezes" in locals() else repetir_vezes)):
+          for i in range(int(repetir_vezes)):
             dt_parc = data_lanc_obj + relativedelta(months=i)
             desc_final = (
                 f"{desc_base} ({i+1}/{repetir_vezes})"
