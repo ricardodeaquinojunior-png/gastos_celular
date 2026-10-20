@@ -4,10 +4,7 @@ from dateutil.relativedelta import relativedelta
 import libsql
 import matplotlib.pyplot as plt
 import streamlit as st
-<<<<<<< HEAD
-=======
 import uuid
->>>>>>> 74f2aea42b308dec88206199ce56e60b6665f663
 
 # Configuração da página para dispositivos móveis
 st.set_page_config(
