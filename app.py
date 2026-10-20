@@ -28,6 +28,7 @@ meses_pt = {
     12: "Dezembro",
 }
 
+
 def conectar_banco():
   try:
     if "turso" in st.secrets:
@@ -72,6 +73,38 @@ def carregar_cartoes():
     return cartoes, principal
   except Exception as e:
     st.error(f"Erro ao carregar cartões: {e}")
+    return {}, None
+
+
+def carregar_contas():
+  try:
+    conn = conectar_banco()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id, instituicao, principal FROM contas ORDER BY instituicao;"
+    )
+    res = cursor.fetchall()
+    cursor.close()
+    conn.close()
+
+    contas = {}
+    principal = None
+    if res:
+      for row in res:
+        cid = str(row[0])
+        inst = row[1]
+        is_principal = row[2] if len(row) > 2 and row[2] is not None else False
+
+        contas[inst] = cid
+        if is_principal:
+          principal = inst
+
+    if not principal and contas:
+      principal = list(contas.keys())[0]
+
+    return contas, principal
+  except Exception as e:
+    st.error(f"Erro ao carregar contas: {e}")
     return {}, None
 
 
@@ -139,7 +172,12 @@ st.title("💰 Meu Controle")
 
 menu = st.radio(
     "Navegação",
-    ["➕ Nova Despesa", "💳 Faturas dos Cartões", "📊 Gráficos por Categoria"],
+    [
+        "➕ Nova Despesa Cartão",
+        "💳 Faturas dos Cartões",
+        "💵 Lançamentos Contas",
+        "📊 Gráficos por Categoria",
+    ],
     horizontal=True,
     label_visibility="collapsed",
 )
@@ -274,7 +312,7 @@ if menu == "💳 Faturas dos Cartões":
 # ==========================================
 # ABA 2: NOVA DESPESA CARTÃO
 # ==========================================
-elif menu == "➕ Nova Despesa":
+elif menu == "➕ Nova Despesa Cartão":
   st.markdown("### 💳 Nova despesa cartão")
 
   if "raw_valor" not in st.session_state:
@@ -395,8 +433,6 @@ elif menu == "➕ Nova Despesa":
       st.error("O valor da despesa deve ser maior que zero.")
     else:
       try:
-        import uuid
-
         id_cartao = cartoes_dict[cartao_selecionado]["id"]
         conn = conectar_banco()
         cursor = conn.cursor()
@@ -454,7 +490,264 @@ elif menu == "➕ Nova Despesa":
         st.error(f"Erro ao salvar no banco de dados: {ex}")
 
 # ==========================================
-# ABA 3: GRÁFICOS POR CATEGORIA E SUBCATEGORIA
+# ABA 3: LANÇAMENTOS CONTAS (Receitas / Despesas / Transferências)
+# ==========================================
+elif menu == "💵 Lançamentos Contas":
+  st.markdown("### 💵 Lançamentos em Contas")
+
+  tipo_lanc = st.selectbox(
+      "Tipo de Lançamento", options=["Receita", "Despesa", "Transferência"]
+  )
+
+  if "raw_valor_conta" not in st.session_state:
+    st.session_state.raw_valor_conta = ""
+  if "val_fmt_conta" not in st.session_state:
+    st.session_state.val_fmt_conta = "R$ 0,00"
+  if "val_num_conta" not in st.session_state:
+    st.session_state.val_num_conta = 0.0
+
+
+  def fmt_valor_conta():
+    digitos = "".join(
+        filter(str.isdigit, st.session_state.get("raw_valor_conta", ""))
+    )
+    if not digitos:
+      st.session_state.val_fmt_conta = "R$ 0,00"
+      st.session_state.val_num_conta = 0.0
+      st.session_state.raw_valor_conta = ""
+      return
+    val_int = int(digitos)
+    val_float = val_int / 100.0
+    st.session_state.val_num_conta = val_float
+    formatado = (
+        f"R$ {val_float:,.2f}"
+        .replace(",", "X")
+        .replace(".", ",")
+        .replace("X", ".")
+    )
+    st.session_state.val_fmt_conta = formatado
+    st.session_state.raw_valor_conta = formatado
+
+
+  st.text_input(
+      f"Valor da {tipo_lanc} (R$)",
+      value=st.session_state.val_fmt_conta,
+      key="raw_valor_conta",
+      on_change=fmt_valor_conta,
+      placeholder="Digite apenas números...",
+  )
+  val_lancamento = st.session_state.val_num_conta
+
+  status_label = (
+      "Recebido"
+      if tipo_lanc == "Receita"
+      else ("Pago" if tipo_lanc == "Despesa" else "Realizada")
+  )
+  status_checkbox = st.checkbox(status_label, value=True)
+
+  if "str_data_conta" not in st.session_state:
+    st.session_state.str_data_conta = datetime.now().strftime("%d/%m/%Y")
+
+  str_data_dig = st.text_input(
+      "Data (DD/MM/AAAA)",
+      value=st.session_state.str_data_conta,
+      max_chars=10,
+  )
+  st.session_state.str_data_conta = str_data_dig
+  try:
+    data_lanc_obj = datetime.strptime(str_data_dig, "%d/%m/%Y").date()
+  except ValueError:
+    st.error("Data inválida! Utilize DD/MM/AAAA.")
+    data_lanc_obj = None
+
+  descricao_conta = st.text_input(
+      "📝 Descrição", placeholder="Ex: Salário, Aluguel, Supermercado..."
+  )
+
+  contas_dict, conta_principal = carregar_contas()
+  if not contas_dict:
+    st.warning("Nenhuma conta bancária cadastrada.")
+    st.stop()
+
+  conta_selecionada = st.selectbox(
+      "🏦 Conta Bancária"
+      if tipo_lanc != "Transferência"
+      else "🏦 Conta de Origem",
+      options=list(contas_dict.keys()),
+      index=(
+          list(contas_dict.keys()).index(conta_principal)
+          if conta_principal in contas_dict
+          else 0
+      ),
+  )
+
+  conta_destino_selecionada = None
+  if tipo_lanc == "Transferência":
+    conta_destino_selecionada = st.selectbox(
+        "🏦 Conta de Destino",
+        options=list(conta for conta in contas_dict.keys()),
+    )
+    if conta_selecionada == conta_destino_selecionada:
+      st.error(
+          "A conta de origem e a conta de destino não podem ser iguais!"
+      )
+
+  id_cat_conta, id_sub_conta = None, None
+  if tipo_lanc != "Transferência":
+    cats_dict = carregar_categorias()
+    cat_sel = st.selectbox(
+        "📂 Categoria", options=list(cats_dict.keys()) if cats_dict else []
+    )
+    id_cat_conta = cats_dict.get(cat_sel) if cat_sel else None
+    subs_dict = carregar_subcategorias(id_cat_conta)
+    sub_sel = st.selectbox(
+        "📂 Subcategoria", options=list(subs_dict.keys()) if subs_dict else []
+    )
+    id_sub_conta = subs_dict.get(sub_sel) if sub_sel else None
+
+  repetir_vezes = 1
+  if tipo_lanc != "Transferência":
+    repetir_vezes = st.number_input(
+        "Repetir (Qtd de vezes)", min_value=1, max_value=60, value=1
+    )
+
+  st.divider()
+
+  if st.button(
+      f"✔ Cadastrar {tipo_lanc}", type="primary", use_container_width=True
+  ):
+    if not descricao_conta.strip():
+      st.error("Preencha a descrição.")
+    elif not data_lanc_obj:
+      st.error("Verifique a data informada.")
+    elif val_lancamento <= 0:
+      st.error("O valor deve ser maior que zero.")
+    elif tipo_lanc == "Transferência" and (
+        conta_selecionada == conta_destino_selecionada
+    ):
+      st.error("Origem e destino devem ser contas diferentes.")
+    else:
+      try:
+        conn = conectar_banco()
+        cursor = conn.cursor()
+        id_conta_origem = contas_dict[conta_selecionada]
+        desc_base = descricao_conta.strip()
+        rec_val = 1 if status_checkbox else 0
+
+        if tipo_lanc == "Transferência":
+          id_conta_dest = contas_dict[conta_destino_selecionada]
+          desc_saida = f"Transferência enviada para {conta_destino_selecionada}"
+          desc_entrada = f"Transferência recebida de {conta_selecionada}"
+
+          novo_id_saida = str(uuid.uuid4())
+          novo_id_entrada = str(uuid.uuid4())
+
+          cursor.execute(
+              """
+                        INSERT INTO lancamentos (id, tipo, valor, recebido, data_lancamento, descricao, id_conta, id_conta_destino, id_cartao)
+                        VALUES (?, 'Transferência', ?, ?, ?, ?, ?, ?, NULL);
+                    """,
+              (
+                  novo_id_saida,
+                  val_lancamento,
+                  rec_val,
+                  data_lanc_obj.strftime("%Y-%m-%d"),
+                  desc_saida,
+                  id_conta_origem,
+                  id_conta_dest,
+              ),
+          )
+
+          cursor.execute(
+              """
+                        INSERT INTO lancamentos (id, tipo, valor, recebido, data_lancamento, descricao, id_conta, id_conta_destino, id_cartao)
+                        VALUES (?, 'Receita', ?, ?, ?, ?, ?, NULL, NULL);
+                    """,
+              (
+                  novo_id_entrada,
+                  val_lancamento,
+                  rec_val,
+                  data_lanc_obj.strftime("%Y-%m-%d"),
+                  desc_entrada,
+                  id_conta_dest,
+              ),
+          )
+          st.success("✔ Transferência cadastrada com sucesso!")
+        else:
+          for i in range(int(repetirer_vezes if "repetirer_vezes" in locals() else repetir_vezes)):
+            dt_parc = data_lanc_obj + relativedelta(months=i)
+            desc_final = (
+                f"{desc_base} ({i+1}/{repetir_vezes})"
+                if repetir_vezes > 1
+                else desc_base
+            )
+            novo_id = str(uuid.uuid4())
+            cursor.execute(
+                """
+                            INSERT INTO lancamentos (id, tipo, valor, recebido, data_lancamento, descricao, id_categoria, id_subcategoria, id_conta, repeticoes, id_cartao)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL);
+                        """,
+                (
+                    novo_id,
+                    tipo_lanc,
+                    val_lancamento,
+                    rec_val,
+                    dt_parc.strftime("%Y-%m-%d"),
+                    desc_final,
+                    id_cat_conta,
+                    id_sub_conta,
+                    id_conta_origem,
+                    repetir_vezes,
+                ),
+            )
+          st.success(f"✔ {tipo_lanc} cadastrada com sucesso!")
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+      except Exception as ex:
+        st.error(f"Erro ao salvar lançamento: {ex}")
+
+  # Listagem rápida dos últimos lançamentos em contas
+  st.subheader("📋 Últimos Lançamentos em Contas")
+  try:
+    conn = conectar_banco()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+            SELECT l.data_lancamento, l.tipo, l.descricao, ct.instituicao, l.valor, l.recebido 
+            FROM lancamentos l
+            LEFT JOIN contas ct ON l.id_conta = ct.id
+            WHERE l.id_cartao IS NULL
+            ORDER BY l.data_lancamento DESC LIMIT 20;
+        """
+    )
+    ult_lanc = cursor.fetchall()
+    cursor.close()
+    conn.close()
+
+    if ult_lanc:
+      for row in ult_lanc:
+        d_data, l_tipo, l_desc, l_conta, l_val, l_rec = row
+        d_fmt = (
+            datetime.strptime(d_data.split()[0], "%Y-%m-%d").strftime(
+                "%d/%m/%Y"
+            )
+            if d_data
+            else ""
+        )
+        cor_sinal = "+" if l_tipo == "Receita" else "-"
+        st.markdown(
+            f"**{d_fmt}** | *{l_tipo}* | {l_desc} ({l_conta or 'N/D'}): **{cor_sinal}R$"
+            f" {float(l_val or 0):,.2f}**"
+        )
+    else:
+      st.info("Nenhum lançamento registrado em contas.")
+  except Exception as e:
+    st.error(f"Erro ao carregar listagem: {e}")
+
+# ==========================================
+# ABA 4: GRÁFICOS POR CATEGORIA E SUBCATEGORIA
 # ==========================================
 elif menu == "📊 Gráficos por Categoria":
   st.markdown("### 📊 Análise Gráfica")
