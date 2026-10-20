@@ -28,12 +28,6 @@ meses_pt = {
     12: "Dezembro",
 }
 
-
-<<<<<<< HEAD
-# Função de conexão inteligente com o Turso
-=======
-# Função de conexão inteligente com o Turso usando libsql
->>>>>>> 74f2aea42b308dec88206199ce56e60b6665f663
 def conectar_banco():
   try:
     if "turso" in st.secrets:
@@ -42,11 +36,6 @@ def conectar_banco():
   except Exception:
     pass
 
-<<<<<<< HEAD
-  # Conexão direta padrão com o Turso para funcionamento local imediato
-=======
-  # Credenciais oficiais do Turso configuradas diretamente para a nuvem
->>>>>>> 74f2aea42b308dec88206199ce56e60b6665f663
   TURSO_URL = "https://controlegastos-jesraj.aws-us-east-1.turso.io"
   TURSO_TOKEN = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3OTIxNzI0NzEsImlkIjoiMDFhMTQ1YmUtZTAwMS03MWY5LTlmMWUtZmFkYTJkZDhhNmEyIiwia2lkIjoiODRpRll2SGxCQ01qVGxyWXVMR0xfUUtWY3E0N1dmWUVxRUxBSTdSNkFqQSIsInJpZCI6IjU1NmQ3ZmUxLTRjZTAtNGZlZi1hMTIzLTEzYzM0ODY5NDFhYiJ9.KqPYdc5g76qkjqBOqhkP3aF3PoLqhIUugJZG8-70X7_nuUv0L60yNxCmbyGNnUXBOeqCJ1_Gx039rl-dDloPCA"
   return libsql.connect(TURSO_URL, auth_token=TURSO_TOKEN)
