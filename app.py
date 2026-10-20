@@ -4,6 +4,10 @@ from dateutil.relativedelta import relativedelta
 import libsql
 import matplotlib.pyplot as plt
 import streamlit as st
+<<<<<<< HEAD
+=======
+import uuid
+>>>>>>> 74f2aea42b308dec88206199ce56e60b6665f663
 
 # Configuração da página para dispositivos móveis
 st.set_page_config(
@@ -28,7 +32,11 @@ meses_pt = {
 }
 
 
+<<<<<<< HEAD
 # Função de conexão inteligente com o Turso
+=======
+# Função de conexão inteligente com o Turso usando libsql
+>>>>>>> 74f2aea42b308dec88206199ce56e60b6665f663
 def conectar_banco():
   try:
     if "turso" in st.secrets:
@@ -37,7 +45,11 @@ def conectar_banco():
   except Exception:
     pass
 
+<<<<<<< HEAD
   # Conexão direta padrão com o Turso para funcionamento local imediato
+=======
+  # Credenciais oficiais do Turso configuradas diretamente para a nuvem
+>>>>>>> 74f2aea42b308dec88206199ce56e60b6665f663
   TURSO_URL = "https://controlegastos-jesraj.aws-us-east-1.turso.io"
   TURSO_TOKEN = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3OTIxNzI0NzEsImlkIjoiMDFhMTQ1YmUtZTAwMS03MWY5LTlmMWUtZmFkYTJkZDhhNmEyIiwia2lkIjoiODRpRll2SGxCQ01qVGxyWXVMR0xfUUtWY3E0N1dmWUVxRUxBSTdSNkFqQSIsInJpZCI6IjU1NmQ3ZmUxLTRjZTAtNGZlZi1hMTIzLTEzYzM0ODY5NDFhYiJ9.KqPYdc5g76qkjqBOqhkP3aF3PoLqhIUugJZG8-70X7_nuUv0L60yNxCmbyGNnUXBOeqCJ1_Gx039rl-dDloPCA"
   return libsql.connect(TURSO_URL, auth_token=TURSO_TOKEN)
@@ -274,7 +286,7 @@ if menu == "💳 Faturas dos Cartões":
     st.info("Nenhum cartão cadastrado.")
 
 # ==========================================
-# ABA 2: NOVA DESPESA CARTÃO (Padrão de Abertura)
+# ABA 2: NOVA DESPESA CARTÃO
 # ==========================================
 elif menu == "➕ Nova Despesa":
   st.markdown("### 💳 Nova despesa cartão")
@@ -461,7 +473,6 @@ elif menu == "➕ Nova Despesa":
 elif menu == "📊 Gráficos por Categoria":
   st.markdown("### 📊 Análise Gráfica")
 
-  # 1. Carregar Cartões para o Filtro Mobile
   try:
     conn_g = conectar_banco()
     cursor_g = conn_g.cursor()
@@ -488,7 +499,6 @@ elif menu == "📊 Gráficos por Categoria":
 
   sel_cartao = st.selectbox("💳 Cartão / Origem", options=nomes_cartoes)
 
-  # 2. Gerar Ciclos de Fatura formatados corretamente em português
   is_cartao = sel_cartao not in ["Todos", "Despesas Gerais (Sem Cartão)"]
   cartao_id = map_cartoes.get(sel_cartao) if is_cartao else None
 
@@ -574,7 +584,6 @@ elif menu == "📊 Gráficos por Categoria":
 
   st.divider()
 
-  # 3. Consulta ao Banco para os Gráficos
   try:
     conn_db = conectar_banco()
     cursor_db = conn_db.cursor()

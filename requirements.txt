@@ -1,4 +1,4 @@
 streamlit
-psycopg2-binary
+libsql-client
 python-dateutil
 matplotlib
