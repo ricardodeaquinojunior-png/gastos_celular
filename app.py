@@ -496,14 +496,13 @@ elif menu == "➕ Nova Despesa Cartão":
         except Exception as ex:
           st.error(f"Erro ao salvar no banco de dados: {ex}")
 
-  else:  # Gerenciar / Editar Despesas de Cartão filtradas pelo mês atual e ordem cronológica
+  else:  # Gerenciar / Editar Despesas de Cartão com sincronização correta do estado
     st.subheader("✏️ Gerenciar Despesas de Cartão")
 
     cartoes_dict, _ = carregar_cartoes()
     if not cartoes_dict:
       st.warning("Nenhum cartão cadastrado.")
     else:
-      # Seletor de Mês (padrão Mês Atual)
       hoje = datetime.now()
       lista_meses_opcoes = []
       for i in range(-3, 4):
@@ -593,10 +592,11 @@ elif menu == "➕ Nova Despesa Cartão":
           escolha_lanc_cartao = st.selectbox(
               "Selecione uma despesa para alterar ou excluir",
               options=list(opcoes_map_cartao.keys()),
+              key="select_lanc_cartao",
           )
           id_selecionado_cartao = opcoes_map_cartao[escolha_lanc_cartao]
 
-          # Carregar dados do registro do cartão escolhido
+          # Carregar dados atualizados do registro do cartão escolhido do banco
           conn = conectar_banco()
           cursor = conn.cursor()
           cursor.execute(
@@ -615,20 +615,6 @@ elif menu == "➕ Nova Despesa Cartão":
                 reg_cartao_atual
             )
 
-            st.markdown("---")
-            st.markdown("### 📝 Editar ou Excluir Despesa de Cartão")
-
-            nova_desc_c = st.text_input(
-                "Descrição", value=rc_desc or "", key="edit_desc_c"
-            )
-            novo_valor_c = st.number_input(
-                "Valor (R$)",
-                min_value=0.0,
-                value=float(rc_val or 0.0),
-                step=1.0,
-                key="edit_val_c",
-            )
-
             try:
               dt_parse_c = datetime.strptime(
                   rc_data.split()[0], "%Y-%m-%d"
@@ -636,11 +622,24 @@ elif menu == "➕ Nova Despesa Cartão":
             except Exception:
               dt_parse_c = date.today()
 
+            st.markdown("---")
+            st.markdown("### 📝 Editar ou Excluir Despesa de Cartão")
+
+            nova_desc_c = st.text_input(
+                "Descrição", value=rc_desc or "", key=f"edit_desc_{id_selecionado_cartao}"
+            )
+            novo_valor_c = st.number_input(
+                "Valor (R$)",
+                min_value=0.0,
+                value=float(rc_val or 0.0),
+                step=1.0,
+                key=f"edit_val_{id_selecionado_cartao}",
+            )
             nova_data_obj_c = st.date_input(
                 "Data da Compra",
                 value=dt_parse_c,
                 format="DD/MM/YYYY",
-                key="edit_data_c",
+                key=f"edit_data_{id_selecionado_cartao}",
             )
 
             col_bc1, col_bc2 = st.columns(2)
@@ -649,7 +648,7 @@ elif menu == "➕ Nova Despesa Cartão":
                   "💾 Salvar Alterações",
                   type="primary",
                   use_container_width=True,
-                  key="btn_salvar_c",
+                  key=f"btn_salvar_{id_selecionado_cartao}",
               ):
                 try:
                   conn = conectar_banco()
@@ -680,7 +679,7 @@ elif menu == "➕ Nova Despesa Cartão":
                   "🗑️ Excluir Despesa",
                   type="secondary",
                   use_container_width=True,
-                  key="btn_excluir_c",
+                  key=f"btn_excluir_{id_selecionado_cartao}",
               ):
                 try:
                   conn = conectar_banco()
@@ -926,7 +925,7 @@ elif menu == "💵 Lançamentos Contas":
         except Exception as ex:
           st.error(f"Erro ao salvar lançamento: {ex}")
 
-  else:  # Aba de Gerenciamento / CRUD (Alterar ou Excluir) com filtro de contas ordenado do mais antigo para o mais recente
+  else:  # Aba de Gerenciamento / CRUD (Alterar ou Excluir) com chaves dinâmicas
     st.subheader("✏️ Gerenciar Lançamentos em Contas")
 
     contas_dict, _ = carregar_contas()
@@ -935,7 +934,7 @@ elif menu == "💵 Lançamentos Contas":
     else:
       opcoes_filtro_contas = ["Todas as contas"] + list(contas_dict.keys())
       conta_filtro_escolhida = st.selectbox(
-          "🏦 Filtrar por Conta", options=opcoes_filtro_contas
+          "🏦 Filtrar por Conta", options=opcoes_filtro_contas, key="filtro_conta_gerencia"
       )
 
       try:
@@ -990,10 +989,11 @@ elif menu == "💵 Lançamentos Contas":
           escolha_lanc = st.selectbox(
               "Selecione um lançamento para alterar ou excluir",
               options=list(opcoes_map.keys()),
+              key="select_lanc_conta",
           )
           id_selecionado = opcoes_map[escolha_lanc]
 
-          # Carregar dados do registro escolhido para edição
+          # Carregar dados atualizados do registro escolhido para edição
           conn = conectar_banco()
           cursor = conn.cursor()
           cursor.execute(
@@ -1012,14 +1012,6 @@ elif menu == "💵 Lançamentos Contas":
                 reg_atual
             )
 
-            st.markdown("---")
-            st.markdown("### 📝 Editar ou Excluir Registro")
-
-            nova_desc = st.text_input("Descrição", value=r_desc or "")
-            novo_valor = st.number_input(
-                "Valor (R$)", min_value=0.0, value=float(r_val or 0.0), step=1.0
-            )
-
             try:
               dt_parse = datetime.strptime(
                   r_data.split()[0], "%Y-%m-%d"
@@ -1027,10 +1019,30 @@ elif menu == "💵 Lançamentos Contas":
             except Exception:
               dt_parse = date.today()
 
-            nova_data_obj = st.date_input(
-                "Data do Lançamento", value=dt_parse, format="DD/MM/YYYY"
+            st.markdown("---")
+            st.markdown("### 📝 Editar ou Excluir Registro")
+
+            nova_desc = st.text_input(
+                "Descrição", value=r_desc or "", key=f"edit_desc_conta_{id_selecionado}"
             )
-            novo_status = st.checkbox("Quitado / Recebido", value=bool(r_rec))
+            novo_valor = st.number_input(
+                "Valor (R$)",
+                min_value=0.0,
+                value=float(r_val or 0.0),
+                step=1.0,
+                key=f"edit_val_conta_{id_selecionado}",
+            )
+            nova_data_obj = st.date_input(
+                "Data do Lançamento",
+                value=dt_parse,
+                format="DD/MM/YYYY",
+                key=f"edit_data_conta_{id_selecionado}",
+            )
+            novo_status = st.checkbox(
+                "Quitado / Recebido",
+                value=bool(r_rec),
+                key=f"edit_status_conta_{id_selecionado}",
+            )
 
             col_b1, col_b2 = st.columns(2)
             with col_b1:
@@ -1038,6 +1050,7 @@ elif menu == "💵 Lançamentos Contas":
                   "💾 Salvar Alterações",
                   type="primary",
                   use_container_width=True,
+                  key=f"btn_salvar_conta_{id_selecionado}",
               ):
                 try:
                   conn = conectar_banco()
@@ -1066,7 +1079,10 @@ elif menu == "💵 Lançamentos Contas":
 
             with col_b2:
               if st.button(
-                  "🗑️ Excluir Lançamento", type="secondary", use_container_width=True
+                  "🗑️ Excluir Lançamento",
+                  type="secondary",
+                  use_container_width=True,
+                  key=f"btn_excluir_conta_{id_selecionado}",
               ):
                 try:
                   conn = conectar_banco()
