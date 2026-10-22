@@ -496,7 +496,7 @@ elif menu == "➕ Nova Despesa Cartão":
         except Exception as ex:
           st.error(f"Erro ao salvar no banco de dados: {ex}")
 
-  else:  # Gerenciar / Editar Despesas de Cartão com sincronização correta do estado
+  else:  # Gerenciar / Editar Despesas de Cartão
     st.subheader("✏️ Gerenciar Despesas de Cartão")
 
     cartoes_dict, _ = carregar_cartoes()
@@ -596,7 +596,6 @@ elif menu == "➕ Nova Despesa Cartão":
           )
           id_selecionado_cartao = opcoes_map_cartao[escolha_lanc_cartao]
 
-          # Carregar dados atualizados do registro do cartão escolhido do banco
           conn = conectar_banco()
           cursor = conn.cursor()
           cursor.execute(
@@ -925,13 +924,40 @@ elif menu == "💵 Lançamentos Contas":
         except Exception as ex:
           st.error(f"Erro ao salvar lançamento: {ex}")
 
-  else:  # Aba de Gerenciamento / CRUD (Alterar ou Excluir) com chaves dinâmicas
+  else:  # Aba de Gerenciamento / CRUD de Contas com filtro de mês e ordenação cronológica
     st.subheader("✏️ Gerenciar Lançamentos em Contas")
 
     contas_dict, _ = carregar_contas()
     if not contas_dict:
       st.warning("Nenhuma conta cadastrada.")
     else:
+      hoje = datetime.now()
+      lista_meses_opcoes = []
+      for i in range(-3, 4):
+        m_ref = hoje + relativedelta(months=i)
+        lista_meses_opcoes.append(m_ref.strftime("%Y-%m"))
+
+
+      def formatar_mes_pt(ano_mes):
+        ano, mes = ano_mes.split("-")
+        return f"{meses_pt.get(int(mes), mes)} de {ano}"
+
+
+      mes_atual_str = hoje.strftime("%Y-%m")
+      indice_atual = (
+          lista_meses_opcoes.index(mes_atual_str)
+          if mes_atual_str in lista_meses_opcoes
+          else 3
+      )
+
+      mes_selecionado_conta = st.selectbox(
+          "📅 Mês de Referência",
+          options=lista_meses_opcoes,
+          index=indice_atual,
+          format_func=formatar_mes_pt,
+          key="mes_filtro_conta",
+      )
+
       opcoes_filtro_contas = ["Todas as contas"] + list(contas_dict.keys())
       conta_filtro_escolhida = st.selectbox(
           "🏦 Filtrar por Conta", options=opcoes_filtro_contas, key="filtro_conta_gerencia"
@@ -947,9 +973,10 @@ elif menu == "💵 Lançamentos Contas":
                   SELECT l.id, l.data_lancamento, l.tipo, l.descricao, ct.instituicao, l.valor, l.recebido 
                   FROM lancamentos l
                   LEFT JOIN contas ct ON l.id_conta = ct.id
-                  WHERE l.id_cartao IS NULL
-                  ORDER BY l.data_lancamento ASC LIMIT 100;
-              """
+                  WHERE l.id_cartao IS NULL AND SUBSTR(l.data_lancamento, 1, 7) = ?
+                  ORDER BY l.data_lancamento ASC;
+              """,
+              (mes_selecionado_conta,),
           )
           lista_regs = cursor.fetchall()
         else:
@@ -959,10 +986,10 @@ elif menu == "💵 Lançamentos Contas":
                   SELECT l.id, l.data_lancamento, l.tipo, l.descricao, ct.instituicao, l.valor, l.recebido 
                   FROM lancamentos l
                   LEFT JOIN contas ct ON l.id_conta = ct.id
-                  WHERE l.id_cartao IS NULL AND l.id_conta = ?
-                  ORDER BY l.data_lancamento ASC LIMIT 100;
+                  WHERE l.id_cartao IS NULL AND l.id_conta = ? AND SUBSTR(l.data_lancamento, 1, 7) = ?
+                  ORDER BY l.data_lancamento ASC;
               """,
-              (id_conta_selecionada,),
+              (id_conta_selecionada, mes_selecionado_conta),
           )
           lista_regs = cursor.fetchall()
 
@@ -970,7 +997,7 @@ elif menu == "💵 Lançamentos Contas":
         conn.close()
 
         if not lista_regs:
-          st.info("Nenhum lançamento encontrado para os critérios selecionados.")
+          st.info("Nenhum lançamento encontrado para este mês e filtros selecionados.")
         else:
           opcoes_map = {}
           for row in lista_regs:
@@ -993,7 +1020,6 @@ elif menu == "💵 Lançamentos Contas":
           )
           id_selecionado = opcoes_map[escolha_lanc]
 
-          # Carregar dados atualizados do registro escolhido para edição
           conn = conectar_banco()
           cursor = conn.cursor()
           cursor.execute(
