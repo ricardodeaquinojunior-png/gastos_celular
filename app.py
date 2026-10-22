@@ -504,7 +504,7 @@ elif menu == "➕ Nova Despesa Cartão":
       st.warning("Nenhum cartão cadastrado.")
     else:
       opcoes_filtro_cartoes = ["Todos os cartões"] + list(cartoes_dict.keys())
-      cartao_filtro_escolhido = st.selectbox(
+      cartao_filtro_escolhida = st.selectbox(
           "💳 Filtrar por Cartão", options=opcoes_filtro_cartoes
       )
 
