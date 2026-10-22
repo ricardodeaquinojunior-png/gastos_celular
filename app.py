@@ -496,16 +496,46 @@ elif menu == "➕ Nova Despesa Cartão":
         except Exception as ex:
           st.error(f"Erro ao salvar no banco de dados: {ex}")
 
-  else:  # Gerenciar / Editar Despesas de Cartão com filtro e ordem cronológica
+  else:  # Gerenciar / Editar Despesas de Cartão filtradas pelo mês atual e ordem cronológica
     st.subheader("✏️ Gerenciar Despesas de Cartão")
 
     cartoes_dict, _ = carregar_cartoes()
     if not cartoes_dict:
       st.warning("Nenhum cartão cadastrado.")
     else:
+      # Seletor de Mês (padrão Mês Atual)
+      hoje = datetime.now()
+      lista_meses_opcoes = []
+      for i in range(-3, 4):
+        m_ref = hoje + relativedelta(months=i)
+        lista_meses_opcoes.append(m_ref.strftime("%Y-%m"))
+
+
+      def formatar_mes_pt(ano_mes):
+        ano, mes = ano_mes.split("-")
+        return f"{meses_pt.get(int(mes), mes)} de {ano}"
+
+
+      mes_atual_str = hoje.strftime("%Y-%m")
+      indice_atual = (
+          lista_meses_opcoes.index(mes_atual_str)
+          if mes_atual_str in lista_meses_opcoes
+          else 3
+      )
+
+      mes_selecionado_c = st.selectbox(
+          "📅 Mês de Referência",
+          options=lista_meses_opcoes,
+          index=indice_atual,
+          format_func=formatar_mes_pt,
+          key="mes_filtro_cartao",
+      )
+
       opcoes_filtro_cartoes = ["Todos os cartões"] + list(cartoes_dict.keys())
       cartao_filtro_escolhida = st.selectbox(
-          "💳 Filtrar por Cartão", options=opcoes_filtro_cartoes
+          "💳 Filtrar por Cartão",
+          options=opcoes_filtro_cartoes,
+          key="cartao_filtro_cartao",
       )
 
       try:
@@ -518,9 +548,10 @@ elif menu == "➕ Nova Despesa Cartão":
                   SELECT l.id, l.data_lancamento, l.descricao, c.nome, l.valor 
                   FROM lancamentos l
                   JOIN cartoes c ON l.id_cartao = c.id
-                  WHERE l.id_cartao IS NOT NULL
-                  ORDER BY l.data_lancamento ASC LIMIT 100;
-              """
+                  WHERE l.id_cartao IS NOT NULL AND SUBSTR(l.data_lancamento, 1, 7) = ?
+                  ORDER BY l.data_lancamento ASC;
+              """,
+              (mes_selecionado_c,),
           )
           lista_regs_cartao = cursor.fetchall()
         else:
@@ -530,10 +561,10 @@ elif menu == "➕ Nova Despesa Cartão":
                   SELECT l.id, l.data_lancamento, l.descricao, c.nome, l.valor 
                   FROM lancamentos l
                   JOIN cartoes c ON l.id_cartao = c.id
-                  WHERE l.id_cartao = ?
-                  ORDER BY l.data_lancamento ASC LIMIT 100;
+                  WHERE l.id_cartao = ? AND SUBSTR(l.data_lancamento, 1, 7) = ?
+                  ORDER BY l.data_lancamento ASC;
               """,
-              (id_cartao_selecionado,),
+              (id_cartao_selecionado, mes_selecionado_c),
           )
           lista_regs_cartao = cursor.fetchall()
 
@@ -541,7 +572,10 @@ elif menu == "➕ Nova Despesa Cartão":
         conn.close()
 
         if not lista_regs_cartao:
-          st.info("Nenhuma despesa de cartão encontrada para os critérios selecionados.")
+          st.info(
+              "Nenhuma despesa de cartão encontrada para este mês e filtros"
+              " selecionados."
+          )
         else:
           opcoes_map_cartao = {}
           for row in lista_regs_cartao:
@@ -584,9 +618,15 @@ elif menu == "➕ Nova Despesa Cartão":
             st.markdown("---")
             st.markdown("### 📝 Editar ou Excluir Despesa de Cartão")
 
-            nova_desc_c = st.text_input("Descrição", value=rc_desc or "", key="edit_desc_c")
+            nova_desc_c = st.text_input(
+                "Descrição", value=rc_desc or "", key="edit_desc_c"
+            )
             novo_valor_c = st.number_input(
-                "Valor (R$)", min_value=0.0, value=float(rc_val or 0.0), step=1.0, key="edit_val_c"
+                "Valor (R$)",
+                min_value=0.0,
+                value=float(rc_val or 0.0),
+                step=1.0,
+                key="edit_val_c",
             )
 
             try:
@@ -597,7 +637,10 @@ elif menu == "➕ Nova Despesa Cartão":
               dt_parse_c = date.today()
 
             nova_data_obj_c = st.date_input(
-                "Data da Compra", value=dt_parse_c, format="DD/MM/YYYY", key="edit_data_c"
+                "Data da Compra",
+                value=dt_parse_c,
+                format="DD/MM/YYYY",
+                key="edit_data_c",
             )
 
             col_bc1, col_bc2 = st.columns(2)
@@ -634,13 +677,17 @@ elif menu == "➕ Nova Despesa Cartão":
 
             with col_bc2:
               if st.button(
-                  "🗑️ Excluir Despesa", type="secondary", use_container_width=True, key="btn_excluir_c"
+                  "🗑️ Excluir Despesa",
+                  type="secondary",
+                  use_container_width=True,
+                  key="btn_excluir_c",
               ):
                 try:
                   conn = conectar_banco()
                   cursor = conn.cursor()
                   cursor.execute(
-                      "DELETE FROM lancamentos WHERE id = ?;", (id_selecionado_cartao,)
+                      "DELETE FROM lancamentos WHERE id = ?;",
+                      (id_selecionado_cartao,),
                   )
                   conn.commit()
                   cursor.close()
