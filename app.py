@@ -716,139 +716,165 @@ elif menu == "💵 Lançamentos Contas":
         except Exception as ex:
           st.error(f"Erro ao salvar lançamento: {ex}")
 
-  else:  # Aba de Gerenciamento / CRUD (Alterar ou Excluir)
+  else:  # Aba de Gerenciamento / CRUD (Alterar ou Excluir) com filtro de contas
     st.subheader("✏️ Gerenciar Lançamentos em Contas")
 
-    try:
-      conn = conectar_banco()
-      cursor = conn.cursor()
-      cursor.execute(
-          """
-              SELECT l.id, l.data_lancamento, l.tipo, l.descricao, ct.instituicao, l.valor, l.recebido 
-              FROM lancamentos l
-              LEFT JOIN contas ct ON l.id_conta = ct.id
-              WHERE l.id_cartao IS NULL
-              ORDER BY l.data_lancamento DESC LIMIT 50;
-          """
+    contas_dict, _ = carregar_contas()
+    if not contas_dict:
+      st.warning("Nenhuma conta cadastrada.")
+    else:
+      # Opções de filtro de contas
+      opcoes_filtro_contas = ["Todas as contas"] + list(contas_dict.keys())
+      conta_filtro_escolhida = st.selectbox(
+          "🏦 Filtrar por Conta", options=opcoes_filtro_contas
       )
-      lista_regs = cursor.fetchall()
-      cursor.close()
-      conn.close()
 
-      if not lista_regs:
-        st.info("Nenhum lançamento encontrado para gerenciar.")
-      else:
-        opcoes_map = {}
-        for row in lista_regs:
-          lid, d_data, l_tipo, l_desc, l_conta, l_val, l_rec = row
-          d_fmt = (
-              datetime.strptime(d_data.split()[0], "%Y-%m-%d").strftime(
-                  "%d/%m/%Y"
-              )
-              if d_data
-              else ""
-          )
-          status_txt = "✅" if l_rec == 1 else "⏳"
-          rotulo = f"[{d_fmt}] {l_tipo} | {l_desc} (R$ {float(l_val or 0):,.2f}) {status_txt}"
-          opcoes_map[rotulo] = lid
-
-        escolha_lanc = st.selectbox(
-            "Selecione um lançamento para alterar ou excluir",
-            options=list(opcoes_map.keys()),
-        )
-        id_selecionado = opcoes_map[escolha_lanc]
-
-        # Carregar dados do registro escolhido
+      try:
         conn = conectar_banco()
         cursor = conn.cursor()
-        cursor.execute(
-            """
-                SELECT id, tipo, valor, recebido, data_lancamento, descricao, id_conta, id_categoria, id_subcategoria
-                FROM lancamentos WHERE id = ?;
-            """,
-            (id_selecionado,),
-        )
-        reg_atual = cursor.fetchone()
+
+        if conta_filtro_escolhida == "Todas as contas":
+          cursor.execute(
+              """
+                  SELECT l.id, l.data_lancamento, l.tipo, l.descricao, ct.instituicao, l.valor, l.recebido 
+                  FROM lancamentos l
+                  LEFT JOIN contas ct ON l.id_conta = ct.id
+                  WHERE l.id_cartao IS NULL
+                  ORDER BY l.data_lancamento DESC LIMIT 100;
+              """
+          )
+          lista_regs = cursor.fetchall()
+        else:
+          id_conta_selecionada = contas_dict[conta_filtro_escolhida]
+          cursor.execute(
+              """
+                  SELECT l.id, l.data_lancamento, l.tipo, l.descricao, ct.instituicao, l.valor, l.recebido 
+                  FROM lancamentos l
+                  LEFT JOIN contas ct ON l.id_conta = ct.id
+                  WHERE l.id_cartao IS NULL AND l.id_conta = ?
+                  ORDER BY l.data_lancamento DESC LIMIT 100;
+              """,
+              (id_conta_selecionada,),
+          )
+          lista_regs = cursor.fetchall()
+
         cursor.close()
         conn.close()
 
-        if reg_atual:
-          _, r_tipo, r_val, r_rec, r_data, r_desc, r_conta, r_cat, r_sub = (
-              reg_atual
-          )
-
-          st.markdown("---")
-          st.markdown("### 📝 Editar ou Excluir Registro")
-
-          nova_desc = st.text_input("Descrição", value=r_desc or "")
-          novo_valor = st.number_input(
-              "Valor (R$)", min_value=0.0, value=float(r_val or 0.0), step=1.0
-          )
-
-          try:
-            dt_parse = datetime.strptime(
-                r_data.split()[0], "%Y-%m-%d"
-            ).date()
-          except Exception:
-            dt_parse = date.today()
-
-          nova_data_obj = st.date_input(
-              "Data do Lançamento", value=dt_parse, format="DD/MM/YYYY"
-          )
-          novo_status = st.checkbox("Quitado / Recebido", value=bool(r_rec))
-
-          col_b1, col_b2 = st.columns(2)
-          with col_b1:
-            if st.button(
-                "💾 Salvar Alterações",
-                type="primary",
-                use_container_width=True,
-            ):
-              try:
-                conn = conectar_banco()
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                                UPDATE lancamentos 
-                                SET descricao = ?, valor = ?, data_lancamento = ?, recebido = ?
-                                WHERE id = ?;
-                            """,
-                    (
-                        nova_desc,
-                        novo_valor,
-                        nova_data_obj.strftime("%Y-%m-%d"),
-                        1 if novo_status else 0,
-                        id_selecionado,
-                    ),
+        if not lista_regs:
+          st.info("Nenhum lançamento encontrado para os critérios selecionados.")
+        else:
+          opcoes_map = {}
+          for row in lista_regs:
+            lid, d_data, l_tipo, l_desc, l_conta, l_val, l_rec = row
+            d_fmt = (
+                datetime.strptime(d_data.split()[0], "%Y-%m-%d").strftime(
+                    "%d/%m/%Y"
                 )
-                conn.commit()
-                cursor.close()
-                conn.close()
-                st.success("✔ Lançamento atualizado com sucesso!")
-                st.rerun()
-              except Exception as ex:
-                st.error(f"Erro ao atualizar: {ex}")
+                if d_data
+                else ""
+            )
+            status_txt = "✅" if l_rec == 1 else "⏳"
+            rotulo = f"[{d_fmt}] {l_tipo} | {l_desc} ({l_conta or 'N/D'} - R$ {float(l_val or 0):,.2f}) {status_txt}"
+            opcoes_map[rotulo] = lid
 
-          with col_b2:
-            if st.button(
-                "🗑️ Excluir Lançamento", type="secondary", use_container_width=True
-            ):
-              try:
-                conn = conectar_banco()
-                cursor = conn.cursor()
-                cursor.execute(
-                    "DELETE FROM lancamentos WHERE id = ?;", (id_selecionado,)
-                )
-                conn.commit()
-                cursor.close()
-                conn.close()
-                st.success("🗑️ Lançamento excluído com sucesso!")
-                st.rerun()
-              except Exception as ex:
-                st.error(f"Erro ao excluir: {ex}")
+          escolha_lanc = st.selectbox(
+              "Selecione um lançamento para alterar ou excluir",
+              options=list(opcoes_map.keys()),
+          )
+          id_selecionado = opcoes_map[escolha_lanc]
 
-    except Exception as e:
-      st.error(f"Erro ao carregar lista para gerenciamento: {e}")
+          # Carregar dados do registro escolhido para edição
+          conn = conectar_banco()
+          cursor = conn.cursor()
+          cursor.execute(
+              """
+                  SELECT id, tipo, valor, recebido, data_lancamento, descricao, id_conta, id_categoria, id_subcategoria
+                  FROM lancamentos WHERE id = ?;
+              """,
+              (id_selecionado,),
+          )
+          reg_atual = cursor.fetchone()
+          cursor.close()
+          conn.close()
+
+          if reg_atual:
+            _, r_tipo, r_val, r_rec, r_data, r_desc, r_conta, r_cat, r_sub = (
+                reg_atual
+            )
+
+            st.markdown("---")
+            st.markdown("### 📝 Editar ou Excluir Registro")
+
+            nova_desc = st.text_input("Descrição", value=r_desc or "")
+            novo_valor = st.number_input(
+                "Valor (R$)", min_value=0.0, value=float(r_val or 0.0), step=1.0
+            )
+
+            try:
+              dt_parse = datetime.strptime(
+                  r_data.split()[0], "%Y-%m-%d"
+              ).date()
+            except Exception:
+              dt_parse = date.today()
+
+            nova_data_obj = st.date_input(
+                "Data do Lançamento", value=dt_parse, format="DD/MM/YYYY"
+            )
+            novo_status = st.checkbox("Quitado / Recebido", value=bool(r_rec))
+
+            col_b1, col_b2 = st.columns(2)
+            with col_b1:
+              if st.button(
+                  "💾 Salvar Alterações",
+                  type="primary",
+                  use_container_width=True,
+              ):
+                try:
+                  conn = conectar_banco()
+                  cursor = conn.cursor()
+                  cursor.execute(
+                      """
+                                  UPDATE lancamentos 
+                                  SET descricao = ?, valor = ?, data_lancamento = ?, recebido = ?
+                                  WHERE id = ?;
+                              """,
+                      (
+                          nova_desc,
+                          novo_valor,
+                          nova_data_obj.strftime("%Y-%m-%d"),
+                          1 if novo_status else 0,
+                          id_selecionado,
+                      ),
+                  )
+                  conn.commit()
+                  cursor.close()
+                  conn.close()
+                  st.success("✔ Lançamento atualizado com sucesso!")
+                  st.rerun()
+                except Exception as ex:
+                  st.error(f"Erro ao atualizar: {ex}")
+
+            with col_b2:
+              if st.button(
+                  "🗑️ Excluir Lançamento", type="secondary", use_container_width=True
+              ):
+                try:
+                  conn = conectar_banco()
+                  cursor = conn.cursor()
+                  cursor.execute(
+                      "DELETE FROM lancamentos WHERE id = ?;", (id_selecionado,)
+                  )
+                  conn.commit()
+                  cursor.close()
+                  conn.close()
+                  st.success("🗑️ Lançamento excluído com sucesso!")
+                  st.rerun()
+                except Exception as ex:
+                  st.error(f"Erro ao excluir: {ex}")
+
+      except Exception as e:
+        st.error(f"Erro ao carregar lista para gerenciamento: {e}")
 
 # ==========================================
 # ABA 4: GRÁFICOS POR CATEGORIA E SUBCATEGORIA
