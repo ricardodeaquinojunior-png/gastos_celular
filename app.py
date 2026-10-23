@@ -31,16 +31,29 @@ meses_pt = {
 
 
 def conectar_banco():
+  conn = None
   try:
     if "turso" in st.secrets:
       db_conf = st.secrets["turso"]
-      return libsql.connect(db_conf["url"], auth_token=db_conf["auth_token"])
+      conn = libsql.connect(db_conf["url"], auth_token=db_conf["auth_token"])
   except Exception:
     pass
 
-  TURSO_URL = "https://controlegastos-jesraj.aws-us-east-1.turso.io"
-  TURSO_TOKEN = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3OTIxNzI0NzEsImlkIjoiMDFhMTQ1YmUtZTAwMS03MWY5LTlmMWUtZmFkYTJkZDhhNmEyIiwia2lkIjoiODRpRll2SGxCQ01qVGxyWXVMR0xfUUtWY3E0N1dmWUVxRUxBSTdSNkFqQSIsInJpZCI6IjU1NmQ3ZmUxLTRjZTAtNGZlZi1hMTIzLTEzYzM0ODY5NDFhYiJ9.KqPYdc5g76qkjqBOqhkP3aF3PoLqhIUugJZG8-70X7_nuUv0L60yNxCmbyGNnUXBOeqCJ1_Gx039rl-dDloPCA"
-  return libsql.connect(TURSO_URL, auth_token=TURSO_TOKEN)
+  if conn is None:
+    TURSO_URL = "https://controlegastos-jesraj.aws-us-east-1.turso.io"
+    TURSO_TOKEN = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3OTIxNzI0NzEsImlkIjoiMDFhMTQ1YmUtZTAwMS03MWY5LTlmMWUtZmFkYTJkZDhhNmEyIiwia2lkIjoiODRpRll2SGxCQ01qVGxyWXVMR0xfUUtWY3E0N1dmWUVxRUxBSTdSNkFqQSIsInJpZCI6IjU1NmQ3ZmUxLTRjZTAtNGZlZi1hMTIzLTEzYzM0ODY5NDFhYiJ9.KqPYdc5g76qkjqBOqhkP3aF3PoLqhIUugJZG8-70X7_nuUv0L60yNxCmbyGNnUXBOeqCJ1_Gx039rl-dDloPCA"
+    conn = libsql.connect(TURSO_URL, auth_token=TURSO_TOKEN)
+
+  # Garante que a coluna atualizado_em existe na tabela lancamentos
+  try:
+    cursor = conn.cursor()
+    cursor.execute("ALTER TABLE lancamentos ADD COLUMN atualizado_em TEXT;")
+    conn.commit()
+    cursor.close()
+  except Exception:
+    pass  # Se a coluna já existir, ignora o erro com segurança
+
+  return conn
 
 
 # --- Funções de Consulta ao Banco ---
@@ -444,6 +457,7 @@ elif menu == "➕ Nova Despesa Cartão":
           conn = conectar_banco()
           cursor = conn.cursor()
           desc_base = descricao.strip()
+          agora_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
           if parcelado:
             valor_parcela = valor / qtd_parcelas
@@ -453,8 +467,8 @@ elif menu == "➕ Nova Despesa Cartão":
               novo_id = str(uuid.uuid4())
               cursor.execute(
                   """
-                              INSERT INTO lancamentos (id, tipo, valor, recebido, data_lancamento, descricao, id_categoria, id_subcategoria, id_cartao, repeticoes)
-                              VALUES (?, 'Despesa', ?, 0, ?, ?, ?, ?, ?, ?);
+                              INSERT INTO lancamentos (id, tipo, valor, recebido, data_lancamento, descricao, id_categoria, id_subcategoria, id_cartao, repeticoes, atualizado_em)
+                              VALUES (?, 'Despesa', ?, 0, ?, ?, ?, ?, ?, ?, ?);
                           """,
                   (
                       novo_id,
@@ -465,6 +479,7 @@ elif menu == "➕ Nova Despesa Cartão":
                       id_sub,
                       id_cartao,
                       qtd_parcelas,
+                      agora_ts,
                   ),
               )
             st.success(
@@ -474,8 +489,8 @@ elif menu == "➕ Nova Despesa Cartão":
             novo_id = str(uuid.uuid4())
             cursor.execute(
                 """
-                          INSERT INTO lancamentos (id, tipo, valor, recebido, data_lancamento, descricao, id_categoria, id_subcategoria, id_cartao, repeticoes)
-                          VALUES (?, 'Despesa', ?, 0, ?, ?, ?, ?, ?, ?);
+                          INSERT INTO lancamentos (id, tipo, valor, recebido, data_lancamento, descricao, id_categoria, id_subcategoria, id_cartao, repeticoes, atualizado_em)
+                          VALUES (?, 'Despesa', ?, 0, ?, ?, ?, ?, ?, ?, ?);
                       """,
                 (
                     novo_id,
@@ -486,6 +501,7 @@ elif menu == "➕ Nova Despesa Cartão":
                     id_sub,
                     id_cartao,
                     1,
+                    agora_ts,
                 ),
             )
             st.success("✔ Despesa de cartão cadastrada com sucesso!")
@@ -652,16 +668,18 @@ elif menu == "➕ Nova Despesa Cartão":
                 try:
                   conn = conectar_banco()
                   cursor = conn.cursor()
+                  agora_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                   cursor.execute(
                       """
                                   UPDATE lancamentos 
-                                  SET descricao = ?, valor = ?, data_lancamento = ?
+                                  SET descricao = ?, valor = ?, data_lancamento = ?, atualizado_em = ?
                                   WHERE id = ?;
                               """,
                       (
                           nova_desc_c,
                           novo_valor_c,
                           nova_data_obj_c.strftime("%Y-%m-%d"),
+                          agora_ts,
                           id_selecionado_cartao,
                       ),
                   )
@@ -849,6 +867,7 @@ elif menu == "💵 Lançamentos Contas":
           id_conta_origem = contas_dict[conta_selecionada]
           desc_base = descricao_conta.strip()
           rec_val = 1 if status_checkbox else 0
+          agora_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
           if tipo_lanc == "Transferência":
             id_conta_dest = contas_dict[conta_destino_selecionada]
@@ -860,8 +879,8 @@ elif menu == "💵 Lançamentos Contas":
 
             cursor.execute(
                 """
-                          INSERT INTO lancamentos (id, tipo, valor, recebido, data_lancamento, descricao, id_conta, id_conta_destino, id_cartao)
-                          VALUES (?, 'Transferência', ?, ?, ?, ?, ?, ?, NULL);
+                          INSERT INTO lancamentos (id, tipo, valor, recebido, data_lancamento, descricao, id_conta, id_conta_destino, id_cartao, atualizado_em)
+                          VALUES (?, 'Transferência', ?, ?, ?, ?, ?, ?, NULL, ?);
                       """,
                 (
                     novo_id_saida,
@@ -871,13 +890,14 @@ elif menu == "💵 Lançamentos Contas":
                     desc_saida,
                     id_conta_origem,
                     id_conta_dest,
+                    agora_ts,
                 ),
             )
 
             cursor.execute(
                 """
-                          INSERT INTO lancamentos (id, tipo, valor, recebido, data_lancamento, descricao, id_conta, id_conta_destino, id_cartao)
-                          VALUES (?, 'Receita', ?, ?, ?, ?, ?, NULL, NULL);
+                          INSERT INTO lancamentos (id, tipo, valor, recebido, data_lancamento, descricao, id_conta, id_conta_destino, id_cartao, atualizado_em)
+                          VALUES (?, 'Receita', ?, ?, ?, ?, ?, NULL, NULL, ?);
                       """,
                 (
                     novo_id_entrada,
@@ -886,6 +906,7 @@ elif menu == "💵 Lançamentos Contas":
                     data_lanc_obj.strftime("%Y-%m-%d"),
                     desc_entrada,
                     id_conta_dest,
+                    agora_ts,
                 ),
             )
             st.success("✔ Transferência cadastrada com sucesso!")
@@ -900,8 +921,8 @@ elif menu == "💵 Lançamentos Contas":
               novo_id = str(uuid.uuid4())
               cursor.execute(
                   """
-                              INSERT INTO lancamentos (id, tipo, valor, recebido, data_lancamento, descricao, id_categoria, id_subcategoria, id_conta, repeticoes, id_cartao)
-                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL);
+                              INSERT INTO lancamentos (id, tipo, valor, recebido, data_lancamento, descricao, id_categoria, id_subcategoria, id_conta, repeticoes, id_cartao, atualizado_em)
+                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?);
                           """,
                   (
                       novo_id,
@@ -914,6 +935,7 @@ elif menu == "💵 Lançamentos Contas":
                       id_sub_conta,
                       id_conta_origem,
                       repetir_vezes,
+                      agora_ts,
                   ),
               )
             st.success(f"✔ {tipo_lanc} cadastrada com sucesso!")
@@ -1081,10 +1103,11 @@ elif menu == "💵 Lançamentos Contas":
                 try:
                   conn = conectar_banco()
                   cursor = conn.cursor()
+                  agora_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                   cursor.execute(
                       """
                                   UPDATE lancamentos 
-                                  SET descricao = ?, valor = ?, data_lancamento = ?, recebido = ?
+                                  SET descricao = ?, valor = ?, data_lancamento = ?, recebido = ?, atualizado_em = ?
                                   WHERE id = ?;
                               """,
                       (
@@ -1092,6 +1115,7 @@ elif menu == "💵 Lançamentos Contas":
                           novo_valor,
                           nova_data_obj.strftime("%Y-%m-%d"),
                           1 if novo_status else 0,
+                          agora_ts,
                           id_selecionado,
                       ),
                   )
