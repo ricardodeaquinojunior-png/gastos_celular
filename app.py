@@ -409,7 +409,6 @@ if menu == "➕ Despesas de Cartão":
     except ValueError:
       continue
 
-    # Obter fechamento do cartão correspondente
     fechamento_cartao = cartoes_dict.get(cnome, {}).get("fechamento", 24)
     inicio_ciclo, fim_ciclo = calcular_ciclo_fatura(d_date, fechamento_cartao)
     ciclo_ano_mes = fim_ciclo.strftime("%Y-%m")
@@ -426,7 +425,6 @@ if menu == "➕ Despesas de Cartão":
             "sub_desc": sub_desc or "Sem Subcategoria"
         })
 
-  # Se "Todos os cartões" foi selecionado, mostra os totais e períodos de cada cartão
   if cartao_escolhido_resumo == "Todos os cartões" and totais_por_cartao:
     st.markdown("#### 📊 Totais por Cartão no Período:")
     for cnome, info in totais_por_cartao.items():
@@ -436,7 +434,6 @@ if menu == "➕ Despesas de Cartão":
       st.markdown(f"- **{cnome}** (Período: {p_inicio} a {p_fim}): **{val_cartao_fmt}**")
     st.divider()
 
-  # Agregar por Categoria e Subcategoria
   agregado = {}
   total_geral = 0.0
 
@@ -455,16 +452,33 @@ if menu == "➕ Despesas de Cartão":
     agregado[c_desc]["subs"][s_desc] += v
 
   if agregado:
+    html_resumo = "<div style='font-family: sans-serif; font-size: 14px;'>"
+    
     for c_desc, c_data in sorted(agregado.items(), key=lambda x: x[1]["total"], reverse=True):
       cat_total_fmt = f"{c_data['total']:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-      st.markdown(f"**{c_desc}** &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; **{cat_total_fmt}**", unsafe_allow_html=True)
+      
+      # Linha da Categoria com alinhamento flexbox e espaçamento reduzido
+      html_resumo += f"""
+      <div style="display: flex; justify-content: space-between; font-weight: bold; margin-top: 6px; margin-bottom: 2px;">
+          <span>{c_desc}</span>
+          <span>{cat_total_fmt}</span>
+      </div>
+      """
       
       for s_desc, s_val in sorted(c_data["subs"].items(), key=lambda x: x[1], reverse=True):
         sub_val_fmt = f"{s_val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-        st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;{s_desc} &nbsp;-&nbsp; {sub_val_fmt}", unsafe_allow_html=True)
+        html_resumo += f"""
+        <div style="display: flex; justify-content: space-between; padding-left: 16px; font-size: 13px; margin-bottom: 2px; color: #444;">
+            <span>{s_desc}</span>
+            <span>{sub_val_fmt}</span>
+        </div>
+        """
       
-      st.markdown("-----------------------------------------------")
+      html_resumo += "<hr style='margin: 6px 0; border: none; border-top: 1px solid #e0e0e0;'>"
     
+    html_resumo += "</div>"
+    st.markdown(html_resumo, unsafe_allow_html=True)
+
     total_geral_fmt = f"{total_geral:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     st.markdown(f"### **Total Geral: {total_geral_fmt}**")
   else:
