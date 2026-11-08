@@ -457,22 +457,17 @@ if menu == "➕ Despesas de Cartão":
     for c_desc, c_data in sorted(agregado.items(), key=lambda x: x[1]["total"], reverse=True):
       cat_total_fmt = f"{c_data['total']:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
       
-      # Linha da Categoria com alinhamento flexbox e espaçamento reduzido
-      html_resumo += f"""
-      <div style="display: flex; justify-content: space-between; font-weight: bold; margin-top: 6px; margin-bottom: 2px;">
-          <span>{c_desc}</span>
-          <span>{cat_total_fmt}</span>
-      </div>
-      """
+      html_resumo += f"""<div style="display: flex; justify-content: space-between; font-weight: bold; margin-top: 6px; margin-bottom: 2px;">
+<span>{c_desc}</span>
+<span>{cat_total_fmt}</span>
+</div>"""
       
       for s_desc, s_val in sorted(c_data["subs"].items(), key=lambda x: x[1], reverse=True):
         sub_val_fmt = f"{s_val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-        html_resumo += f"""
-        <div style="display: flex; justify-content: space-between; padding-left: 16px; font-size: 13px; margin-bottom: 2px; color: #444;">
-            <span>{s_desc}</span>
-            <span>{sub_val_fmt}</span>
-        </div>
-        """
+        html_resumo += f"""<div style="display: flex; justify-content: space-between; padding-left: 16px; font-size: 13px; margin-bottom: 2px; color: #444;">
+<span>{s_desc}</span>
+<span>{sub_val_fmt}</span>
+</div>"""
       
       html_resumo += "<hr style='margin: 6px 0; border: none; border-top: 1px solid #e0e0e0;'>"
     
