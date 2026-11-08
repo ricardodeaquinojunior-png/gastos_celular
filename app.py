@@ -9,7 +9,7 @@ import uuid
 
 # Configuração da página para dispositivos móveis
 st.set_page_config(
-    page_title="Controle Financeiro", page_icon="💰", layout="centered"
+    page_title="Controle Financeiro - Cartões", page_icon="💳", layout="centered"
 )
 
 
@@ -51,12 +51,11 @@ def conectar_banco():
     conn.commit()
     cursor.close()
   except Exception:
-    pass  # Se a coluna já existir, ignora o erro com segurança
+    pass
 
   return conn
 
 
-# --- Funções de Consulta ao Banco ---
 def carregar_cartoes():
   try:
     conn = conectar_banco()
@@ -90,80 +89,34 @@ def carregar_cartoes():
     return {}, None
 
 
-def carregar_contas():
+def carregar_todas_subcategorias_com_categoria():
+  """Retorna uma lista de subcategorias ordenadas alfabeticamente com suas respectivas categorias."""
   try:
     conn = conectar_banco()
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT id, instituicao, principal FROM contas ORDER BY instituicao;"
-    )
+    cursor.execute("""
+            SELECT s.id_subcategoria, s.descricao, c.id_categoria, c.descricao 
+            FROM subcategorias s
+            JOIN categorias c ON s.id_categoria = c.id_categoria
+            ORDER BY s.descricao ASC;
+        """)
     res = cursor.fetchall()
     cursor.close()
     conn.close()
-
-    contas = {}
-    principal = None
+    
+    subs_lista = []
     if res:
       for row in res:
-        cid = str(row[0])
-        inst = row[1]
-        is_principal = row[2] if len(row) > 2 and row[2] is not None else False
-
-        contas[inst] = cid
-        if is_principal:
-          principal = inst
-
-    if not principal and contas:
-      principal = list(contas.keys())[0]
-
-    return contas, principal
-  except Exception as e:
-    st.error(f"Erro ao carregar contas: {e}")
-    return {}, None
-
-
-def carregar_categorias():
-  try:
-    conn = conectar_banco()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT id_categoria, descricao FROM categorias ORDER BY descricao;"
-    )
-    res = cursor.fetchall()
-    cursor.close()
-    conn.close()
-    cats = {}
-    if res:
-      for row in res:
-        cats[row[1]] = str(row[0])
-    return cats
-  except Exception as e:
-    st.error(f"Erro ao carregar categorias: {e}")
-    return {}
-
-
-def carregar_subcategorias(id_categoria):
-  if not id_categoria:
-    return {}
-  try:
-    conn = conectar_banco()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT id_subcategoria, descricao FROM subcategorias WHERE"
-        " id_categoria = ? ORDER BY descricao;",
-        (id_categoria,),
-    )
-    res = cursor.fetchall()
-    cursor.close()
-    conn.close()
-    subs = {}
-    if res:
-      for row in res:
-        subs[row[1]] = str(row[0])
-    return subs
+        subs_lista.append({
+            "id_sub": str(row[0]),
+            "sub_desc": row[1],
+            "id_cat": str(row[2]),
+            "cat_desc": row[3]
+        })
+    return subs_lista
   except Exception as e:
     st.error(f"Erro ao carregar subcategorias: {e}")
-    return {}
+    return []
 
 
 def calcular_ciclo_fatura(d_date, dia_fechamento):
@@ -181,15 +134,14 @@ def calcular_ciclo_fatura(d_date, dia_fechamento):
   return inicio, fim
 
 
-# --- Cabeçalho e Menu Superior Discreto ---
-st.title("💰 Meu Controle")
+# --- Cabeçalho e Menu Superior ---
+st.title("💳 Controle de Cartões")
 
 menu = st.radio(
     "Navegação",
     [
         "➕ Nova Despesa Cartão",
         "💳 Faturas dos Cartões",
-        "💵 Lançamentos Contas",
         "📊 Gráficos por Categoria",
     ],
     horizontal=True,
@@ -198,7 +150,7 @@ menu = st.radio(
 st.divider()
 
 # ==========================================
-# ABA 1: FATURAS DOS CARTÕES (Por Período)
+# ABA 1: FATURAS DOS CARTÕES
 # ==========================================
 if menu == "💳 Faturas dos Cartões":
   hoje = datetime.now()
@@ -228,7 +180,7 @@ if menu == "💳 Faturas dos Cartões":
   )
 
   st.divider()
-  st.subheader("💳 Faturas dos Cartões (Regra de Período)")
+  st.subheader("💳 Faturas dos Cartões")
 
   cartoes_dict, _ = carregar_cartoes()
   if cartoes_dict:
@@ -248,13 +200,7 @@ if menu == "💳 Faturas dos Cartões":
       faturas_por_cartao = {}
       if todos_lanc_cartoes:
         for row in todos_lanc_cartoes:
-          val, ldata, ldesc, c_nome, c_fech = (
-              row[0],
-              row[1],
-              row[2],
-              row[3],
-              row[4],
-          )
+          val, ldata, ldesc, c_nome, c_fech = row[0], row[1], row[2], row[3], row[4]
           if not ldata:
             continue
           if isinstance(ldata, str):
@@ -266,7 +212,6 @@ if menu == "💳 Faturas dos Cartões":
             d_date = ldata.date() if hasattr(ldata, "date") else ldata
 
           fechamento = c_fech or 24
-
           inicio_ciclo, fim_ciclo = calcular_ciclo_fatura(d_date, fechamento)
           ciclo_ano_mes = fim_ciclo.strftime("%Y-%m")
 
@@ -335,6 +280,23 @@ elif menu == "➕ Nova Despesa Cartão":
   st.divider()
 
   if aba_op_cartao == "➕ Nova Despesa":
+    cartoes_dict, cartao_principal = carregar_cartoes()
+    if not cartoes_dict:
+      st.warning("Nenhum cartão encontrado. Verifique sua tabela de cartões.")
+      st.stop()
+
+    # 1. Seleção do Cartão por Radio (bolinhas)
+    st.markdown("##### 💳 Despesas de Cartão")
+    lista_nomes_cartoes = list(cartoes_dict.keys())
+    cartao_selecionado = st.radio(
+        "Selecione o Cartão",
+        options=lista_nomes_cartoes,
+        index=lista_nomes_cartoes.index(cartao_principal) if cartao_principal in lista_nomes_cartoes else 0,
+        horizontal=True,
+        label_visibility="collapsed"
+    )
+
+    # 2. Campo de Valor com máscara de moeda progressiva
     if "raw_valor" not in st.session_state:
       st.session_state.raw_valor = ""
     if "input_valor_formatado" not in st.session_state:
@@ -373,9 +335,39 @@ elif menu == "➕ Nova Despesa Cartão":
         on_change=formatar_moeda_input,
         placeholder="Digite apenas os números...",
     )
-
     valor = st.session_state.valor_numerico
 
+    # 3. Campo Descrição
+    descricao = st.text_input("📝 Descrição", placeholder="Ex: Supermercado, Uber...")
+
+    # 4. Subcategorias em ordem alfabética e Categoria automática
+    subs_lista = carregar_todas_subcategorias_com_categoria()
+    sub_opcoes = [item["sub_desc"] for item in subs_lista] if subs_lista else []
+
+    sub_selecionada = st.selectbox(
+        "📂 Subcategoria",
+        options=sub_opcoes,
+        placeholder="Selecione a subcategoria..."
+    )
+
+    # Identificar a categoria correspondente à subcategoria escolhida
+    id_cat = None
+    id_sub = None
+    cat_desc_exibicao = ""
+    if sub_selecionada and subs_lista:
+      item_encontrado = next((i for i in subs_lista if i["sub_desc"] == sub_selecionada), None)
+      if item_encontrado:
+        id_sub = item_encontrado["id_sub"]
+        id_cat = item_encontrado["id_cat"]
+        cat_desc_exibicao = item_encontrado["cat_desc"]
+
+    st.text_input(
+        "📂 Categoria (Preenchimento Automático)",
+        value=cat_desc_exibicao,
+        disabled=True
+    )
+
+    # 5. Data da compra
     if "str_data_compra" not in st.session_state:
       st.session_state.str_data_compra = datetime.now().strftime("%d/%m/%Y")
 
@@ -402,35 +394,6 @@ elif menu == "➕ Nova Despesa Cartão":
       st.error("Formato de data inválido! Utilize estritamente DD/MM/AAAA.")
       data_compra = None
 
-    descricao = st.text_input("📝 Descrição", placeholder="Ex: Supermercado, Uber...")
-
-    cartoes_dict, cartao_principal = carregar_cartoes()
-    if not cartoes_dict:
-      st.warning("Nenhum cartão encontrado. Verifique sua tabela de cartões.")
-      st.stop()
-
-    cartao_selecionado = st.selectbox(
-        "💳 Cartão de Crédito",
-        options=list(cartoes_dict.keys()),
-        index=(
-            list(cartoes_dict.keys()).index(cartao_principal)
-            if cartao_principal in cartoes_dict
-            else 0
-        ),
-    )
-
-    cats_dict = carregar_categorias()
-    cat_selecionada = st.selectbox(
-        "📂 Categoria", options=list(cats_dict.keys()) if cats_dict else []
-    )
-
-    id_cat = cats_dict.get(cat_selecionada) if cat_selecionada else None
-    subs_dict = carregar_subcategorias(id_cat)
-    sub_selecionada = st.selectbox(
-        "📂 Subcategoria", options=list(subs_dict.keys()) if subs_dict else []
-    )
-    id_sub = subs_dict.get(sub_selecionada) if sub_selecionada else None
-
     parcelado = st.checkbox("🔁 Despesa Parcelada")
     qtd_parcelas = 1
     if parcelado:
@@ -445,8 +408,8 @@ elif menu == "➕ Nova Despesa Cartão":
     if st.button("✔ Cadastrar Despesa", type="primary", use_container_width=True):
       if not descricao.strip():
         st.error("Por favor, preencha a descrição da despesa.")
-      elif not cat_selecionada:
-        st.error("Selecione uma categoria.")
+      elif not sub_selecionada:
+        st.error("Selecione uma subcategoria.")
       elif not data_compra:
         st.error("Corrija o formato da data antes de salvar.")
       elif valor <= 0:
@@ -717,442 +680,7 @@ elif menu == "➕ Nova Despesa Cartão":
         st.error(f"Erro ao carregar lista de despesas de cartão: {e}")
 
 # ==========================================
-# ABA 3: LANÇAMENTOS CONTAS (Receitas / Despesas / Transferências com CRUD)
-# ==========================================
-elif menu == "💵 Lançamentos Contas":
-  st.markdown("### 💵 Lançamentos em Contas & CRUD")
-
-  aba_op = st.radio(
-      "Ação", ["➕ Novo Lançamento", "✏️ Gerenciar / Editar Lançamentos"], horizontal=True
-  )
-  st.divider()
-
-  if aba_op == "➕ Novo Lançamento":
-    tipo_lanc = st.selectbox(
-        "Tipo de Lançamento", options=["Receita", "Despesa", "Transferência"]
-    )
-
-    if "raw_valor_conta" not in st.session_state:
-      st.session_state.raw_valor_conta = ""
-    if "val_fmt_conta" not in st.session_state:
-      st.session_state.val_fmt_conta = "R$ 0,00"
-    if "val_num_conta" not in st.session_state:
-      st.session_state.val_num_conta = 0.0
-
-
-    def formatar_moeda_conta_input():
-      digitos = "".join(
-          filter(str.isdigit, st.session_state.get("raw_valor_conta", ""))
-      )
-      if not digitos:
-        st.session_state.val_fmt_conta = "R$ 0,00"
-        st.session_state.val_num_conta = 0.0
-        st.session_state.raw_valor_conta = ""
-        return
-
-      val_int = int(digitos)
-      val_float = val_int / 100.0
-      st.session_state.val_num_conta = val_float
-      formatado = (
-          f"R$ {val_float:,.2f}"
-          .replace(",", "X")
-          .replace(".", ",")
-          .replace("X", ".")
-      )
-      st.session_state.val_fmt_conta = formatado
-      st.session_state.raw_valor_conta = formatado
-
-
-    st.text_input(
-        f"Valor da {tipo_lanc} (R$)",
-        value=st.session_state.val_fmt_conta,
-        key="raw_valor_conta",
-        on_change=formatar_moeda_conta_input,
-        placeholder="Digite apenas os números...",
-    )
-    val_lancamento = st.session_state.val_num_conta
-
-    status_label = (
-        "Recebido"
-        if tipo_lanc == "Receita"
-        else ("Pago" if tipo_lanc == "Despesa" else "Realizada")
-    )
-    status_checkbox = st.checkbox(status_label, value=True)
-
-    if "str_data_conta" not in st.session_state:
-      st.session_state.str_data_conta = datetime.now().strftime("%d/%m/%Y")
-
-    str_data_dig = st.text_input(
-        "Data (DD/MM/AAAA)",
-        value=st.session_state.str_data_conta,
-        max_chars=10,
-    )
-    st.session_state.str_data_conta = str_data_dig
-    try:
-      data_lanc_obj = datetime.strptime(str_data_dig, "%d/%m/%Y").date()
-    except ValueError:
-      st.error("Data inválida! Utilize DD/MM/AAAA.")
-      data_lanc_obj = None
-
-    descricao_conta = st.text_input(
-        "📝 Descrição", placeholder="Ex: Salário, Aluguel, Supermercado..."
-    )
-
-    contas_dict, conta_principal = carregar_contas()
-    if not contas_dict:
-      st.warning("Nenhuma conta bancária cadastrada.")
-      st.stop()
-
-    conta_selecionada = st.selectbox(
-        "🏦 Conta Bancária"
-        if tipo_lanc != "Transferência"
-        else "🏦 Conta de Origem",
-        options=list(contas_dict.keys()),
-        index=(
-            list(contas_dict.keys()).index(conta_principal)
-            if conta_principal in contas_dict
-            else 0
-        ),
-    )
-
-    conta_destino_selecionada = None
-    if tipo_lanc == "Transferência":
-      conta_destino_selecionada = st.selectbox(
-          "🏦 Conta de Destino",
-          options=list(conta for conta in contas_dict.keys()),
-      )
-      if conta_selecionada == conta_destino_selecionada:
-        st.error(
-            "A conta de origem e a conta de destino não podem ser iguais!"
-        )
-
-    id_cat_conta, id_sub_conta = None, None
-    if tipo_lanc != "Transferência":
-      cats_dict = carregar_categorias()
-      cat_sel = st.selectbox(
-          "📂 Categoria", options=list(cats_dict.keys()) if cats_dict else []
-      )
-      id_cat_conta = cats_dict.get(cat_sel) if cat_sel else None
-      subs_dict = carregar_subcategorias(id_cat_conta)
-      sub_sel = st.selectbox(
-          "📂 Subcategoria", options=list(subs_dict.keys()) if subs_dict else []
-      )
-      id_sub_conta = subs_dict.get(sub_sel) if sub_sel else None
-
-    repetir_vezes = 1
-    if tipo_lanc != "Transferência":
-      repetir_vezes = st.number_input(
-          "Repetir (Qtd de vezes)", min_value=1, max_value=60, value=1
-      )
-
-    st.divider()
-
-    if st.button(
-        f"✔ Cadastrar {tipo_lanc}", type="primary", use_container_width=True
-    ):
-      if not descricao_conta.strip():
-        st.error("Preencha a descrição.")
-      elif not data_lanc_obj:
-        st.error("Verifique a data informada.")
-      elif val_lancamento <= 0:
-        st.error("O valor deve ser maior que zero.")
-      elif tipo_lanc == "Transferência" and (
-          conta_selecionada == conta_destino_selecionada
-      ):
-        st.error("Origem e destino devem ser contas diferentes.")
-      else:
-        try:
-          conn = conectar_banco()
-          cursor = conn.cursor()
-          id_conta_origem = contas_dict[conta_selecionada]
-          desc_base = descricao_conta.strip()
-          rec_val = 1 if status_checkbox else 0
-          agora_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-          if tipo_lanc == "Transferência":
-            id_conta_dest = contas_dict[conta_destino_selecionada]
-            desc_saida = f"Transferência enviada para {conta_destino_selecionada}"
-            desc_entrada = f"Transferência recebida de {conta_selecionada}"
-
-            novo_id_saida = str(uuid.uuid4())
-            novo_id_entrada = str(uuid.uuid4())
-
-            cursor.execute(
-                """
-                          INSERT INTO lancamentos (id, tipo, valor, recebido, data_lancamento, descricao, id_conta, id_conta_destino, id_cartao, atualizado_em)
-                          VALUES (?, 'Transferência', ?, ?, ?, ?, ?, ?, NULL, ?);
-                      """,
-                (
-                    novo_id_saida,
-                    val_lancamento,
-                    rec_val,
-                    data_lanc_obj.strftime("%Y-%m-%d"),
-                    desc_saida,
-                    id_conta_origem,
-                    id_conta_dest,
-                    agora_ts,
-                ),
-            )
-
-            cursor.execute(
-                """
-                          INSERT INTO lancamentos (id, tipo, valor, recebido, data_lancamento, descricao, id_conta, id_conta_destino, id_cartao, atualizado_em)
-                          VALUES (?, 'Receita', ?, ?, ?, ?, ?, NULL, NULL, ?);
-                      """,
-                (
-                    novo_id_entrada,
-                    val_lancamento,
-                    rec_val,
-                    data_lanc_obj.strftime("%Y-%m-%d"),
-                    desc_entrada,
-                    id_conta_dest,
-                    agora_ts,
-                ),
-            )
-            st.success("✔ Transferência cadastrada com sucesso!")
-          else:
-            for i in range(int(repetir_vezes)):
-              dt_parc = data_lanc_obj + relativedelta(months=i)
-              desc_final = (
-                  f"{desc_base} ({i+1}/{repetir_vezes})"
-                  if repetir_vezes > 1
-                  else desc_base
-              )
-              novo_id = str(uuid.uuid4())
-              cursor.execute(
-                  """
-                              INSERT INTO lancamentos (id, tipo, valor, recebido, data_lancamento, descricao, id_categoria, id_subcategoria, id_conta, repeticoes, id_cartao, atualizado_em)
-                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?);
-                          """,
-                  (
-                      novo_id,
-                      tipo_lanc,
-                      val_lancamento,
-                      rec_val,
-                      dt_parc.strftime("%Y-%m-%d"),
-                      desc_final,
-                      id_cat_conta,
-                      id_sub_conta,
-                      id_conta_origem,
-                      repetir_vezes,
-                      agora_ts,
-                  ),
-              )
-            st.success(f"✔ {tipo_lanc} cadastrada com sucesso!")
-
-          conn.commit()
-          cursor.close()
-          conn.close()
-        except Exception as ex:
-          st.error(f"Erro ao salvar lançamento: {ex}")
-
-  else:  # Aba de Gerenciamento / CRUD de Contas com filtro de mês e ordenação cronológica
-    st.subheader("✏️ Gerenciar Lançamentos em Contas")
-
-    contas_dict, _ = carregar_contas()
-    if not contas_dict:
-      st.warning("Nenhuma conta cadastrada.")
-    else:
-      hoje = datetime.now()
-      lista_meses_opcoes = []
-      for i in range(-3, 4):
-        m_ref = hoje + relativedelta(months=i)
-        lista_meses_opcoes.append(m_ref.strftime("%Y-%m"))
-
-
-      def formatar_mes_pt(ano_mes):
-        ano, mes = ano_mes.split("-")
-        return f"{meses_pt.get(int(mes), mes)} de {ano}"
-
-
-      mes_atual_str = hoje.strftime("%Y-%m")
-      indice_atual = (
-          lista_meses_opcoes.index(mes_atual_str)
-          if mes_atual_str in lista_meses_opcoes
-          else 3
-      )
-
-      mes_selecionado_conta = st.selectbox(
-          "📅 Mês de Referência",
-          options=lista_meses_opcoes,
-          index=indice_atual,
-          format_func=formatar_mes_pt,
-          key="mes_filtro_conta",
-      )
-
-      opcoes_filtro_contas = ["Todas as contas"] + list(contas_dict.keys())
-      conta_filtro_escolhida = st.selectbox(
-          "🏦 Filtrar por Conta", options=opcoes_filtro_contas, key="filtro_conta_gerencia"
-      )
-
-      try:
-        conn = conectar_banco()
-        cursor = conn.cursor()
-
-        if conta_filtro_escolhida == "Todas as contas":
-          cursor.execute(
-              """
-                  SELECT l.id, l.data_lancamento, l.tipo, l.descricao, ct.instituicao, l.valor, l.recebido 
-                  FROM lancamentos l
-                  LEFT JOIN contas ct ON l.id_conta = ct.id
-                  WHERE l.id_cartao IS NULL AND SUBSTR(l.data_lancamento, 1, 7) = ?
-                  ORDER BY l.data_lancamento ASC;
-              """,
-              (mes_selecionado_conta,),
-          )
-          lista_regs = cursor.fetchall()
-        else:
-          id_conta_selecionada = contas_dict[conta_filtro_escolhida]
-          cursor.execute(
-              """
-                  SELECT l.id, l.data_lancamento, l.tipo, l.descricao, ct.instituicao, l.valor, l.recebido 
-                  FROM lancamentos l
-                  LEFT JOIN contas ct ON l.id_conta = ct.id
-                  WHERE l.id_cartao IS NULL AND l.id_conta = ? AND SUBSTR(l.data_lancamento, 1, 7) = ?
-                  ORDER BY l.data_lancamento ASC;
-              """,
-              (id_conta_selecionada, mes_selecionado_conta),
-          )
-          lista_regs = cursor.fetchall()
-
-        cursor.close()
-        conn.close()
-
-        if not lista_regs:
-          st.info("Nenhum lançamento encontrado para este mês e filtros selecionados.")
-        else:
-          opcoes_map = {}
-          for row in lista_regs:
-            lid, d_data, l_tipo, l_desc, l_conta, l_val, l_rec = row
-            d_fmt = (
-                datetime.strptime(d_data.split()[0], "%Y-%m-%d").strftime(
-                    "%d/%m/%Y"
-                )
-                if d_data
-                else ""
-            )
-            status_txt = "✅" if l_rec == 1 else "⏳"
-            rotulo = f"[{d_fmt}] {l_tipo} | {l_desc} ({l_conta or 'N/D'} - R$ {float(l_val or 0):,.2f}) {status_txt}"
-            opcoes_map[rotulo] = lid
-
-          escolha_lanc = st.selectbox(
-              "Selecione um lançamento para alterar ou excluir",
-              options=list(opcoes_map.keys()),
-              key="select_lanc_conta",
-          )
-          id_selecionado = opcoes_map[escolha_lanc]
-
-          conn = conectar_banco()
-          cursor = conn.cursor()
-          cursor.execute(
-              """
-                  SELECT id, tipo, valor, recebido, data_lancamento, descricao, id_conta, id_categoria, id_subcategoria
-                  FROM lancamentos WHERE id = ?;
-              """,
-              (id_selecionado,),
-          )
-          reg_atual = cursor.fetchone()
-          cursor.close()
-          conn.close()
-
-          if reg_atual:
-            _, r_tipo, r_val, r_rec, r_data, r_desc, r_conta, r_cat, r_sub = (
-                reg_atual
-            )
-
-            try:
-              dt_parse = datetime.strptime(
-                  r_data.split()[0], "%Y-%m-%d"
-              ).date()
-            except Exception:
-              dt_parse = date.today()
-
-            st.markdown("---")
-            st.markdown("### 📝 Editar ou Excluir Registro")
-
-            nova_desc = st.text_input(
-                "Descrição", value=r_desc or "", key=f"edit_desc_conta_{id_selecionado}"
-            )
-            novo_valor = st.number_input(
-                "Valor (R$)",
-                min_value=0.0,
-                value=float(r_val or 0.0),
-                step=1.0,
-                key=f"edit_val_conta_{id_selecionado}",
-            )
-            nova_data_obj = st.date_input(
-                "Data do Lançamento",
-                value=dt_parse,
-                format="DD/MM/YYYY",
-                key=f"edit_data_conta_{id_selecionado}",
-            )
-            novo_status = st.checkbox(
-                "Quitado / Recebido",
-                value=bool(r_rec),
-                key=f"edit_status_conta_{id_selecionado}",
-            )
-
-            col_b1, col_b2 = st.columns(2)
-            with col_b1:
-              if st.button(
-                  "💾 Salvar Alterações",
-                  type="primary",
-                  use_container_width=True,
-                  key=f"btn_salvar_conta_{id_selecionado}",
-              ):
-                try:
-                  conn = conectar_banco()
-                  cursor = conn.cursor()
-                  agora_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                  cursor.execute(
-                      """
-                                  UPDATE lancamentos 
-                                  SET descricao = ?, valor = ?, data_lancamento = ?, recebido = ?, atualizado_em = ?
-                                  WHERE id = ?;
-                              """,
-                      (
-                          nova_desc,
-                          novo_valor,
-                          nova_data_obj.strftime("%Y-%m-%d"),
-                          1 if novo_status else 0,
-                          agora_ts,
-                          id_selecionado,
-                      ),
-                  )
-                  conn.commit()
-                  cursor.close()
-                  conn.close()
-                  st.success("✔ Lançamento atualizado com sucesso!")
-                  st.rerun()
-                except Exception as ex:
-                  st.error(f"Erro ao atualizar: {ex}")
-
-            with col_b2:
-              if st.button(
-                  "🗑️ Excluir Lançamento",
-                  type="secondary",
-                  use_container_width=True,
-                  key=f"btn_excluir_conta_{id_selecionado}",
-              ):
-                try:
-                  conn = conectar_banco()
-                  cursor = conn.cursor()
-                  cursor.execute(
-                      "DELETE FROM lancamentos WHERE id = ?;", (id_selecionado,)
-                  )
-                  conn.commit()
-                  cursor.close()
-                  conn.close()
-                  st.success("🗑️ Lançamento excluído com sucesso!")
-                  st.rerun()
-                except Exception as ex:
-                  st.error(f"Erro ao excluir: {ex}")
-
-      except Exception as e:
-        st.error(f"Erro ao carregar lista para gerenciamento: {e}")
-
-# ==========================================
-# ABA 4: GRÁFICOS POR CATEGORIA E SUBCATEGORIA
+# ABA 3: GRÁFICOS POR CATEGORIA E SUBCATEGORIA
 # ==========================================
 elif menu == "📊 Gráficos por Categoria":
   st.markdown("### 📊 Análise Gráfica")
@@ -1172,7 +700,7 @@ elif menu == "📊 Gráficos por Categoria":
 
   map_cartoes = {}
   map_cartao_detalhes = {}
-  nomes_cartoes = ["Todos", "Despesas Gerais (Sem Cartão)"]
+  nomes_cartoes = ["Todos"]
   for cid, cnome, c_fech, c_venc in cartoes_db:
     map_cartoes[cnome] = str(cid)
     map_cartao_detalhes[str(cid)] = {
@@ -1181,9 +709,9 @@ elif menu == "📊 Gráficos por Categoria":
     }
     nomes_cartoes.append(cnome)
 
-  sel_cartao = st.selectbox("💳 Cartão / Origem", options=nomes_cartoes)
+  sel_cartao = st.selectbox("💳 Cartão", options=nomes_cartoes)
 
-  is_cartao = sel_cartao not in ["Todos", "Despesas Gerais (Sem Cartão)"]
+  is_cartao = sel_cartao != "Todos"
   cartao_id = map_cartoes.get(sel_cartao) if is_cartao else None
 
   ciclos = []
@@ -1256,7 +784,7 @@ elif menu == "📊 Gráficos por Categoria":
       m_ref = hoje + relativedelta(months=i)
       mes_nome = meses_pt.get(m_ref.month, str(m_ref.month))
       rotulo = f"{mes_nome} de {m_ref.year}"
-      ciclos.append((rotulo, m_ref.strftime("%Y-%m")))
+      ciclos.append((rotulo, m_ref))
 
   if not ciclos:
     ciclos = [("Mês Atual", datetime.now().strftime("%Y-%m"))]
@@ -1287,24 +815,25 @@ elif menu == "📊 Gráficos por Categoria":
             """,
           (
               cartao_id,
-              d_ini.strftime("%Y-%m-%d")
-              if hasattr(d_ini, "strftime")
-              else str(d_ini),
-              d_fim.strftime("%Y-%m-%d")
-              if hasattr(d_fim, "strftime")
-              else str(d_fim),
+              d_ini.strftime("%Y-%m-%d") if hasattr(d_ini, "strftime") else str(d_ini),
+              d_fim.strftime("%Y-%m-%d") if hasattr(d_fim, "strftime") else str(d_fim),
           ),
       )
       dados_cat = cursor_db.fetchall()
+    else:
+      # Para "Todos", iteramos pelos ciclos consolidados por mês baseados na data de lançamento
+      _, mes_ref_val = ciclo_selecionado
+      if isinstance(mes_ref_val, str):
+        mes_ano_str = mes_ref_val
+      else:
+        mes_ano_str = mes_ref_val.strftime("%Y-%m")
 
-    elif sel_cartao == "Despesas Gerais (Sem Cartão)":
-      _, mes_ano_str = ciclo_selecionado
       cursor_db.execute(
           """
                 SELECT c.id_categoria, c.descricao, SUM(l.valor) 
                 FROM lancamentos l
                 JOIN categorias c ON l.id_categoria = c.id_categoria
-                WHERE l.tipo = 'Despesa' AND l.id_cartao IS NULL 
+                WHERE l.tipo = 'Despesa' AND l.id_cartao IS NOT NULL 
                   AND SUBSTR(l.data_lancamento, 1, 7) = ?
                 GROUP BY c.id_categoria, c.descricao 
                 ORDER BY SUM(l.valor) DESC;
@@ -1312,68 +841,6 @@ elif menu == "📊 Gráficos por Categoria":
           (mes_ano_str,),
       )
       dados_cat = cursor_db.fetchall()
-
-    else:
-      _, mes_ano_str = ciclo_selecionado
-      ano_sel, mes_sel = map(int, mes_ano_str.split("-"))
-      acumulador_cats = {}
-
-      for cid, det in map_cartao_detalhes.items():
-        fechamento_dia = det["fechamento"]
-        ref_date = date(
-            ano_sel,
-            mes_sel,
-            min(15, calendar.monthrange(ano_sel, mes_sel)[1]),
-        )
-        d_ini, d_fim = calcular_ciclo_fatura(ref_date, fechamento_dia)
-        cursor_db.execute(
-            """
-                    SELECT c.id_categoria, c.descricao, SUM(l.valor) 
-                    FROM lancamentos l
-                    JOIN categorias c ON l.id_categoria = c.id_categoria
-                    WHERE l.tipo = 'Despesa' AND l.id_cartao = ? 
-                      AND l.data_lancamento >= ? AND l.data_lancamento <= ?
-                    GROUP BY c.id_categoria, c.descricao;
-                """,
-            (
-                cid,
-                d_ini.strftime("%Y-%m-%d")
-                if hasattr(d_ini, "strftime")
-                else str(d_ini),
-                d_fim.strftime("%Y-%m-%d")
-                if hasattr(d_fim, "strftime")
-                else str(d_fim),
-            ),
-        )
-        for cat_id, cat_desc, val in cursor_db.fetchall():
-          v_f = float(val or 0)
-          if cat_id in acumulador_cats:
-            acumulador_cats[cat_id][1] += v_f
-          else:
-            acumulador_cats[cat_id] = [cat_desc, v_f]
-
-      cursor_db.execute(
-          """
-                SELECT c.id_categoria, c.descricao, SUM(l.valor) 
-                FROM lancamentos l
-                JOIN categorias c ON l.id_categoria = c.id_categoria
-                WHERE l.tipo = 'Despesa' AND l.id_cartao IS NULL 
-                  AND SUBSTR(l.data_lancamento, 1, 7) = ?
-                GROUP BY c.id_categoria, c.descricao;
-            """,
-          (mes_ano_str,),
-      )
-      for cat_id, cat_desc, val in cursor_db.fetchall():
-        v_f = float(val or 0)
-        if cat_id in acumulador_cats:
-          acumulador_cats[cat_id][1] += v_f
-        else:
-          acumulador_cats[cat_id] = [cat_desc, v_f]
-
-      dados_cat = [
-          (cid, dados[0], dados[1]) for cid, dados in acumulador_cats.items()
-      ]
-      dados_cat.sort(key=lambda x: x[2], reverse=True)
 
     if dados_cat:
       cats = [item[1] for item in dados_cat]
@@ -1390,12 +857,8 @@ elif menu == "📊 Gráficos por Categoria":
         st.info(
             f"💳 Total das despesas do cartão **{sel_cartao}**: **{valor_fmt}**"
         )
-      elif sel_cartao == "Despesas Gerais (Sem Cartão)":
-        st.info(f"📂 Total das despesas gerais no período: **{valor_fmt}**")
       else:
-        st.info(
-            f"📊 Total geral de gastos (cartões + gerais): **{valor_fmt}**"
-        )
+        st.info(f"📊 Total geral de gastos dos cartões: **{valor_fmt}**")
 
       fig1, ax1 = plt.subplots(figsize=(8, 4.5))
       bars1 = ax1.bar(
@@ -1454,91 +917,26 @@ elif menu == "📊 Gráficos por Categoria":
             (
                 cartao_id,
                 cat_escolhida_id,
-                d_ini.strftime("%Y-%m-%d")
-                if hasattr(d_ini, "strftime")
-                else str(d_ini),
-                d_fim.strftime("%Y-%m-%d")
-                if hasattr(d_fim, "strftime")
-                else str(d_fim),
+                d_ini.strftime("%Y-%m-%d") if hasattr(d_ini, "strftime") else str(d_ini),
+                d_fim.strftime("%Y-%m-%d") if hasattr(d_fim, "strftime") else str(d_fim),
             ),
         )
         dados_sub = cursor_db.fetchall()
-      elif sel_cartao == "Despesas Gerais (Sem Cartão)":
-        _, mes_ano_str = ciclo_selecionado
+      else:
+        _, mes_ref_val = ciclo_selecionado
+        mes_ano_str = mes_ref_val if isinstance(mes_ref_val, str) else mes_ref_val.strftime("%Y-%m")
         cursor_db.execute(
             """
                     SELECT s.descricao, SUM(l.valor) 
                     FROM lancamentos l
                     JOIN subcategorias s ON l.id_subcategoria = s.id_subcategoria
-                    WHERE l.tipo = 'Despesa' AND l.id_cartao IS NULL AND l.id_categoria = ?
+                    WHERE l.tipo = 'Despesa' AND l.id_cartao IS NOT NULL AND l.id_categoria = ?
                       AND SUBSTR(l.data_lancamento, 1, 7) = ?
                     GROUP BY s.descricao ORDER BY SUM(l.valor) ASC;
                 """,
             (cat_escolhida_id, mes_ano_str),
         )
         dados_sub = cursor_db.fetchall()
-      else:
-        _, mes_ano_str = ciclo_selecionado
-        ano_sel, mes_sel = map(int, mes_ano_str.split("-"))
-        acumulador_subs = {}
-
-        for cid, det in map_cartao_detalhes.items():
-          fechamento_dia = det["fechamento"]
-          ref_date = date(
-              ano_sel,
-              mes_sel,
-              min(15, calendar.monthrange(ano_sel, mes_sel)[1]),
-          )
-          d_ini, d_fim = calcular_ciclo_fatura(ref_date, fechamento_dia)
-          cursor_db.execute(
-              """
-                        SELECT s.descricao, SUM(l.valor) 
-                        FROM lancamentos l
-                        JOIN subcategorias s ON l.id_subcategoria = s.id_subcategoria
-                        WHERE l.tipo = 'Despesa' AND l.id_cartao = ? AND l.id_categoria = ?
-                          AND l.data_lancamento >= ? AND l.data_lancamento <= ?
-                        GROUP BY s.descricao;
-                    """,
-              (
-                  cid,
-                  cat_escolhida_id,
-                  d_ini.strftime("%Y-%m-%d")
-                  if hasattr(d_ini, "strftime")
-                  else str(d_ini),
-                  d_fim.strftime("%Y-%m-%d")
-                  if hasattr(d_fim, "strftime")
-                  else str(d_fim),
-              ),
-          )
-          for sub_desc, val in cursor_db.fetchall():
-            v_f = float(val or 0)
-            if sub_desc in acumulador_subs:
-              acumulador_subs[sub_desc] += v_f
-            else:
-              acumulador_subs[sub_desc] = v_f
-
-        cursor_db.execute(
-            """
-                    SELECT s.descricao, SUM(l.valor) 
-                    FROM lancamentos l
-                    JOIN subcategorias s ON l.id_subcategoria = s.id_subcategoria
-                    WHERE l.tipo = 'Despesa' AND l.id_cartao IS NULL AND l.id_categoria = ?
-                      AND SUBSTR(l.data_lancamento, 1, 7) = ?
-                    GROUP BY s.descricao;
-                """,
-            (cat_escolhida_id, mes_ano_str),
-        )
-        for sub_desc, val in cursor_db.fetchall():
-          v_f = float(val or 0)
-          if sub_desc in acumulador_subs:
-            acumulador_subs[sub_desc] += v_f
-          else:
-            acumulador_subs[sub_desc] = v_f
-
-        dados_sub = [
-            (s_desc, s_val) for s_desc, s_val in acumulador_subs.items()
-        ]
-        dados_sub.sort(key=lambda x: x[1])
 
       if dados_sub:
         subs = [item[0] for item in dados_sub]
