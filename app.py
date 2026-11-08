@@ -150,7 +150,7 @@ menu = st.radio(
 st.divider()
 
 # ==========================================
-# ABA 1: DESPESAS DE CARTÃO (NOVO LANÇAMENTO)
+# ABA 1: DESPESAS DE CARTÃO (NOVO LANÇAMENTO & RESUMO)
 # ==========================================
 if menu == "➕ Despesas de Cartão":
   cartoes_dict, cartao_principal = carregar_cartoes()
@@ -347,6 +347,128 @@ if menu == "➕ Despesas de Cartão":
         conn.close()
       except Exception as ex:
         st.error(f"Erro ao salvar no banco de dados: {ex}")
+
+  # ==========================================
+  # SEÇÃO DE RESUMO ABAIXO DO CADASTRO
+  # ==========================================
+  st.divider()
+  st.markdown("### 📋 Resumo das Despesas por Período")
+
+  hoje = datetime.now()
+  lista_meses_opcoes = []
+  for i in range(-3, 4):
+    m_ref = hoje + relativedelta(months=i)
+    lista_meses_opcoes.append(m_ref.strftime("%Y-%m"))
+
+  def formatar_mes_pt(ano_mes):
+    ano, mes = ano_mes.split("-")
+    return f"{meses_pt.get(int(mes), mes)} de {ano}"
+
+  mes_atual_str = hoje.strftime("%Y-%m")
+  indice_atual = lista_meses_opcoes.index(mes_atual_str) if mes_atual_str in lista_meses_opcoes else 3
+
+  mes_resumo_sel = st.selectbox(
+      "📅 Período de Referência (Mês)",
+      options=lista_meses_opcoes,
+      index=indice_atual,
+      format_func=formatar_mes_pt,
+      key="resumo_mes_sel"
+  )
+
+  opcoes_cartao_resumo = ["Todos os cartões"] + list(cartoes_dict.keys())
+  cartao_escolhido_resumo = st.selectbox("💳 Filtrar Cartão (Resumo)", options=opcoes_cartao_resumo, key="resumo_cartao_sel")
+
+  try:
+    conn = conectar_banco()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT l.valor, l.data_lancamento, c.nome, 
+               cat.descricao, sub.descricao
+        FROM lancamentos l
+        JOIN cartoes c ON l.id_cartao = c.id
+        LEFT JOIN categorias cat ON l.id_categoria = cat.id_categoria
+        LEFT JOIN subcategorias sub ON l.id_subcategoria = sub.id_subcategoria
+        WHERE l.id_cartao IS NOT NULL;
+    """)
+    todos_lancamentos = cursor.fetchall()
+    cursor.close()
+    conn.close()
+  except Exception as e:
+    st.error(f"Erro ao carregar despesas para o resumo: {e}")
+    todos_lancamentos = []
+
+  lancamentos_filtrados = []
+  totais_por_cartao = {}
+
+  for row in todos_lancamentos:
+    val, ldata, cnome, cat_desc, sub_desc = row
+    if not ldata:
+      continue
+    try:
+      d_date = datetime.strptime(ldata.split()[0], "%Y-%m-%d").date()
+    except ValueError:
+      continue
+
+    # Obter fechamento do cartão correspondente
+    fechamento_cartao = cartoes_dict.get(cnome, {}).get("fechamento", 24)
+    inicio_ciclo, fim_ciclo = calcular_ciclo_fatura(d_date, fechamento_cartao)
+    ciclo_ano_mes = fim_ciclo.strftime("%Y-%m")
+
+    if ciclo_ano_mes == mes_resumo_sel:
+      if cnome not in totais_por_cartao:
+        totais_por_cartao[cnome] = {"total": 0.0, "inicio": inicio_ciclo, "fim": fim_ciclo}
+      totais_por_cartao[cnome]["total"] += float(val or 0)
+
+      if cartao_escolhido_resumo == "Todos os cartões" or cartao_escolhido_resumo == cnome:
+        lancamentos_filtrados.append({
+            "valor": float(val or 0),
+            "cat_desc": cat_desc or "Sem Categoria",
+            "sub_desc": sub_desc or "Sem Subcategoria"
+        })
+
+  # Se "Todos os cartões" foi selecionado, mostra os totais e períodos de cada cartão
+  if cartao_escolhido_resumo == "Todos os cartões" and totais_por_cartao:
+    st.markdown("#### 📊 Totais por Cartão no Período:")
+    for cnome, info in totais_por_cartao.items():
+      p_inicio = info["inicio"].strftime('%d/%m/%Y')
+      p_fim = info["fim"].strftime('%d/%m/%Y')
+      val_cartao_fmt = f"R$ {info['total']:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+      st.markdown(f"- **{cnome}** (Período: {p_inicio} a {p_fim}): **{val_cartao_fmt}**")
+    st.divider()
+
+  # Agregar por Categoria e Subcategoria
+  agregado = {}
+  total_geral = 0.0
+
+  for item in lancamentos_filtrados:
+    c_desc = item["cat_desc"]
+    s_desc = item["sub_desc"]
+    v = item["valor"]
+    total_geral += v
+
+    if c_desc not in agregado:
+      agregado[c_desc] = {"total": 0.0, "subs": {}}
+    agregado[c_desc]["total"] += v
+
+    if s_desc not in agregado[c_desc]["subs"]:
+      agregado[c_desc]["subs"][s_desc] = 0.0
+    agregado[c_desc]["subs"][s_desc] += v
+
+  if agregado:
+    for c_desc, c_data in sorted(agregado.items(), key=lambda x: x[1]["total"], reverse=True):
+      cat_total_fmt = f"{c_data['total']:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+      st.markdown(f"**{c_desc}** &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; **{cat_total_fmt}**", unsafe_allow_html=True)
+      
+      for s_desc, s_val in sorted(c_data["subs"].items(), key=lambda x: x[1], reverse=True):
+        sub_val_fmt = f"{s_val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;{s_desc} &nbsp;-&nbsp; {sub_val_fmt}", unsafe_allow_html=True)
+      
+      st.markdown("-----------------------------------------------")
+    
+    total_geral_fmt = f"{total_geral:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    st.markdown(f"### **Total Geral: {total_geral_fmt}**")
+  else:
+    st.info("Nenhuma despesa encontrada para este cartão/período.")
 
 # ==========================================
 # ABA 2: FATURAS DOS CARTÕES
