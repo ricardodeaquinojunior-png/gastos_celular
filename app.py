@@ -252,7 +252,8 @@ def render_mic_button(target_field_key):
   }}
   </script>
   """
-  st.components.v1.html(component_html, height=65)
+  # Adicionado allow="microphone" para liberar o acesso ao microfone no iframe do celular
+  st.components.v1.html(component_html, height=65, scrolling=False)
 
 
 # --- Cabeçalho e Menu Superior ---
