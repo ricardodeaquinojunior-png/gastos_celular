@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from datetime import date, datetime, timedelta
 from dateutil.relativedelta import relativedelta
+from zoneinfo import ZoneInfo
 import calendar
 import libsql
 import matplotlib.pyplot as plt
@@ -241,15 +242,15 @@ if menu == "➕ Despesas de Cartão":
 
   # 5. Data da compra
   if "str_data_compra" not in st.session_state:
-    st.session_state.str_data_compra = datetime.now().strftime("%d/%m/%Y")
+    st.session_state.str_data_compra = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y")
 
   col_d1, col_d2 = st.columns(2)
   with col_d1:
     if st.button("📅 Hoje", use_container_width=True):
-      st.session_state.str_data_compra = datetime.now().strftime("%d/%m/%Y")
+      st.session_state.str_data_compra = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y")
   with col_d2:
     if st.button("↩️ Ontem", use_container_width=True):
-      ontem = datetime.now().date() - timedelta(days=1)
+      ontem = datetime.now(ZoneInfo("America/Sao_Paulo")).date() - timedelta(days=1)
       st.session_state.str_data_compra = ontem.strftime("%d/%m/%Y")
 
   str_data_digitada = st.text_input(
@@ -292,7 +293,10 @@ if menu == "➕ Despesas de Cartão":
         conn = conectar_banco()
         cursor = conn.cursor()
         desc_base = descricao.strip()
-        agora_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Força o fuso horário de Brasília para o carimbo de sincronização
+        fuso_br = ZoneInfo("America/Sao_Paulo")
+        agora_ts = datetime.now(fuso_br).strftime("%Y-%m-%d %H:%M:%S")
 
         if parcelado:
           valor_parcela = valor / qtd_parcelas
@@ -353,7 +357,7 @@ if menu == "➕ Despesas de Cartão":
   st.divider()
   st.markdown("### 📋 Resumo das Despesas por Período")
 
-  hoje = datetime.now()
+  hoje = datetime.now(ZoneInfo("America/Sao_Paulo"))
   lista_meses_opcoes = []
   for i in range(-3, 4):
     m_ref = hoje + relativedelta(months=i)
@@ -482,7 +486,7 @@ if menu == "➕ Despesas de Cartão":
 # ABA 2: FATURAS DOS CARTÕES
 # ==========================================
 elif menu == "💳 Faturas dos Cartões":
-  hoje = datetime.now()
+  hoje = datetime.now(ZoneInfo("America/Sao_Paulo"))
   lista_meses_opcoes = []
   for i in range(-3, 4):
     m_ref = hoje + relativedelta(months=i)
@@ -697,7 +701,7 @@ elif menu == "📊 Gráficos por Categoria":
     except Exception:
       pass
   else:
-    hoje = date.today()
+    hoje = datetime.now(ZoneInfo("America/Sao_Paulo")).date()
     for i in range(-3, 12):
       m_ref = hoje + relativedelta(months=i)
       mes_nome = meses_pt.get(m_ref.month, str(m_ref.month))
@@ -705,7 +709,7 @@ elif menu == "📊 Gráficos por Categoria":
       ciclos.append((rotulo, m_ref))
 
   if not ciclos:
-    ciclos = [("Mês Atual", datetime.now().strftime("%Y-%m"))]
+    ciclos = [("Mês Atual", datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%Y-%m"))]
 
   sel_ciclo_txt = st.selectbox(
       "📅 Período / Ciclo", options=[c[0] for c in ciclos]
