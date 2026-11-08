@@ -2,7 +2,7 @@
 from datetime import date, datetime, timedelta
 from dateutil.relativedelta import relativedelta
 import calendar
-import sqlite3
+import libsql
 import matplotlib.pyplot as plt
 import streamlit as st
 import uuid
@@ -157,11 +157,33 @@ def render_mic_button(target_field_key):
     st.components.v1.html(component_html, height=65)
 
 def conectar_banco():
-    # Usando SQLite local padrão do Python para evitar problemas de compilação no Windows.
-    db_path = "banco.db"
-    conn = sqlite3.connect(db_path)
+    turso_url = ""
+    turso_token = ""
+    
+    try:
+        if "TURSO_DATABASE_URL" in st.secrets:
+            turso_url = st.secrets["TURSO_DATABASE_URL"]
+        if "TURSO_AUTH_TOKEN" in st.secrets:
+            turso_token = st.secrets["TURSO_AUTH_TOKEN"]
+    except Exception:
+        pass
+        
+    if not turso_url:
+        turso_url = os.environ.get("TURSO_DATABASE_URL", "")
+    if not turso_token:
+        turso_token = os.environ.get("TURSO_AUTH_TOKEN", "")
+        
+    if not turso_url:
+        st.sidebar.warning("⚠️ Credenciais do Turso não encontradas nas secrets. Configure na barra lateral se necessário:")
+        turso_url = st.sidebar.text_input("Turso Database URL", value="")
+        turso_token = st.sidebar.text_input("Turso Auth Token", type="password", value="")
+        
+    if not turso_url:
+        st.error("A URL do banco de dados Turso é obrigatória para sincronizar com o celular. Configure a URL e o Token.")
+        st.stop()
+        
+    conn = libsql.connect(turso_url, auth_token=turso_token)
 
-    # Garante que as tabelas básicas existam caso o banco seja novo
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS cartoes (
@@ -211,12 +233,11 @@ def conectar_banco():
     """)
     conn.commit()
 
-    # Garante que a coluna atualizado_em existe na tabela lancamentos
     try:
         cursor.execute("ALTER TABLE lancamentos ADD COLUMN atualizado_em TEXT;")
         conn.commit()
     except Exception:
-        pass  # Se a coluna já existir, ignora
+        pass
 
     cursor.close()
     return conn
@@ -461,7 +482,6 @@ elif menu == "➕ Nova Despesa Cartão":
             st.session_state.input_valor_formatado = formatado
             st.session_state.raw_valor = formatado
 
-        # Campo Valor com Microfone ao lado
         col_v1, col_v2 = st.columns([5, 1])
         with col_v1:
             st.text_input(
@@ -505,7 +525,6 @@ elif menu == "➕ Nova Despesa Cartão":
         if "raw_desc_cartao" not in st.session_state:
             st.session_state.raw_desc_cartao = ""
 
-        # Campo Descrição com Microfone ao lado
         col_desc1, col_desc2 = st.columns([5, 1])
         with col_desc1:
             descricao = st.text_input(
@@ -746,7 +765,6 @@ elif menu == "💵 Lançamentos Contas":
             st.session_state.val_fmt_conta = formatado
             st.session_state.raw_valor_conta = formatado
 
-        # Campo Valor com Microfone ao lado
         col_vc1, col_vc2 = st.columns([5, 1])
         with col_vc1:
             st.text_input(
@@ -778,7 +796,6 @@ elif menu == "💵 Lançamentos Contas":
         if "raw_desc_conta" not in st.session_state:
             st.session_state.raw_desc_conta = ""
 
-        # Campo Descrição com Microfone ao lado
         col_dcc1, col_dcc2 = st.columns([5, 1])
         with col_dcc1:
             descricao_conta = st.text_input(
