@@ -6,7 +6,6 @@ import libsql
 import matplotlib.pyplot as plt
 import streamlit as st
 import uuid
-import re
 
 # Configuração da página para dispositivos móveis
 st.set_page_config(
@@ -135,127 +134,6 @@ def calcular_ciclo_fatura(d_date, dia_fechamento):
   return inicio, fim
 
 
-def parse_valor_falado(texto):
-  if not texto:
-    return 0.0
-  t = texto.lower().strip()
-  t_clean = t.replace("reais", "").replace("real", "").replace("centavos", "").replace("centavo", "").strip()
-  digits = re.findall(r'\d+', t_clean)
-  if digits:
-    if len(digits) == 1:
-      val = float(digits[0])
-      if " e " in t_clean and val < 100:
-        parts = t_clean.split(" e ")
-        if len(parts) == 2 and parts[0].strip().isdigit() and parts[1].strip().isdigit():
-          return float(f"{parts[0].strip()}.{parts[1].strip()}")
-      return val
-    elif len(digits) >= 2:
-      return float(f"{digits[0]}.{digits[1]}")
-      
-  palavras_map = {
-      "um": 1, "uma": 1, "dois": 2, "duas": 2, "três": 3, "quatro": 4,
-      "cinco": 5, "seis": 6, "sete": 7, "oito": 8, "nove": 9,
-      "dez": 10, "onze": 11, "doze": 12, "treze": 13, "quatorze": 14,
-      "quinze": 15, "dezesseis": 16, "dezessete": 17, "dezoito": 18, "dezenove": 19,
-      "vinte": 20, "trinta": 30, "quarenta": 40, "cinquenta": 50,
-      "sessenta": 60, "setenta": 70, "oitenta": 80, "noventa": 90,
-      "cem": 100, "duzentos": 200, "trezentos": 300, "quatrocentos": 400,
-      "quinhentos": 500, "seiscentos": 600, "setecentos": 700, "oitocentos": 800, "novecentos": 900
-  }
-  
-  palavras = t_clean.split()
-  total = 0.0
-  subtotal = 0.0
-  for p in palavras:
-    if p in palavras_map:
-      subtotal += palavras_map[p]
-    elif p == "cem" or p == "cento":
-      subtotal += 100
-    elif p == "mil":
-      total += (subtotal if subtotal > 0 else 1) * 1000
-      subtotal = 0
-  total += subtotal
-  return float(total) if total > 0 else 0.0
-
-
-# Processar resultado de voz (Speech-to-Text) se houver na URL
-if "stt_text" in st.query_params:
-  stt_text = st.query_params["stt_text"]
-  stt_target = st.query_params.get("stt_target", "")
-  
-  if stt_target == "valor_cartao":
-    val_num = parse_valor_falado(stt_text)
-    st.session_state.valor_numerico = val_num
-    formatado = f"R$ {val_num:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    st.session_state.input_valor_formatado = formatado
-    st.session_state.raw_valor = formatado
-  elif stt_target == "desc_cartao":
-    st.session_state.raw_desc_cartao = stt_text
-      
-  st.query_params.clear()
-
-
-def render_mic_button(target_field_key):
-  component_html = f"""
-  <div style="display: flex; align-items: center; height: 100%; padding-top: 24px;">
-      <button id="mic_{target_field_key}" onclick="startSpeechRec()" style="
-          background-color: #2B6CB0;
-          color: white;
-          border: none;
-          border-radius: 4px;
-          padding: 8px 12px;
-          cursor: pointer;
-          font-size: 16px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          width: 100%;
-      " title="Clique para falar">
-          🎤
-      </button>
-  </div>
-  <script>
-  function startSpeechRec() {{
-      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (!SpeechRecognition) {{
-          alert('Seu navegador não suporta reconhecimento de voz.');
-          return;
-      }}
-      const recognition = new SpeechRecognition();
-      recognition.lang = 'pt-BR';
-      recognition.interimResults = false;
-      recognition.maxAlternatives = 1;
-      
-      const btn = document.getElementById('mic_{target_field_key}');
-      btn.style.backgroundColor = '#E53E3E';
-      btn.innerText = '🔴';
-      
-      recognition.onresult = function(event) {{
-          const speechResult = event.results[0][0].transcript;
-          const url = new URL(window.parent.location.href);
-          url.searchParams.set('stt_target', '{target_field_key}');
-          url.searchParams.set('stt_text', speechResult);
-          window.parent.location.href = url.toString();
-      }};
-      
-      recognition.onerror = function(event) {{
-          btn.style.backgroundColor = '#2B6CB0';
-          btn.innerText = '🎤';
-      }};
-      
-      recognition.onend = function() {{
-          btn.style.backgroundColor = '#2B6CB0';
-          btn.innerText = '🎤';
-      }};
-      
-      recognition.start();
-  }}
-  </script>
-  """
-  # Adicionado allow="microphone" para liberar o acesso ao microfone no iframe do celular
-  st.components.v1.html(component_html, height=65, scrolling=False)
-
-
 # --- Cabeçalho e Menu Superior ---
 st.title("💳 Despesas de Cartão")
 
@@ -291,7 +169,7 @@ if menu == "➕ Despesas de Cartão":
       label_visibility="collapsed"
   )
 
-  # 2. Campo de Valor com máscara de moeda progressiva e Microfone
+  # 2. Campo de Valor com máscara de moeda progressiva
   if "raw_valor" not in st.session_state:
     st.session_state.raw_valor = ""
   if "input_valor_formatado" not in st.session_state:
@@ -323,34 +201,17 @@ if menu == "➕ Despesas de Cartão":
     st.session_state.raw_valor = formatado
 
 
-  col_v1, col_v2 = st.columns([5, 1])
-  with col_v1:
-    st.text_input(
-        "Valor da despesa cartão (R$)",
-        value=st.session_state.input_valor_formatado,
-        key="raw_valor",
-        on_change=formatar_moeda_input,
-        placeholder="Digite apenas os números...",
-    )
-  with col_v2:
-    render_mic_button("valor_cartao")
-
+  st.text_input(
+      "Valor da despesa cartão (R$)",
+      value=st.session_state.input_valor_formatado,
+      key="raw_valor",
+      on_change=formatar_moeda_input,
+      placeholder="Digite apenas os números...",
+  )
   valor = st.session_state.valor_numerico
 
-  # 3. Campo Descrição com Microfone
-  if "raw_desc_cartao" not in st.session_state:
-    st.session_state.raw_desc_cartao = ""
-
-  col_desc1, col_desc2 = st.columns([5, 1])
-  with col_desc1:
-    descricao = st.text_input(
-        "📝 Descrição",
-        value=st.session_state.raw_desc_cartao,
-        key="raw_desc_cartao",
-        placeholder="Ex: Supermercado, Uber..."
-    )
-  with col_desc2:
-    render_mic_button("desc_cartao")
+  # 3. Campo Descrição
+  descricao = st.text_input("📝 Descrição", placeholder="Ex: Supermercado, Uber...")
 
   # 4. Subcategorias em ordem alfabética e Categoria automática
   subs_lista = carregar_todas_subcategorias_com_categoria()
