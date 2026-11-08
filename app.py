@@ -135,12 +135,12 @@ def calcular_ciclo_fatura(d_date, dia_fechamento):
 
 
 # --- Cabeçalho e Menu Superior ---
-st.title("💳 Controle de Cartões")
+st.title("💳 Despesas de Cartão")
 
 menu = st.radio(
     "Navegação",
     [
-        "➕ Nova Despesa Cartão",
+        "➕ Despesas de Cartão",
         "💳 Faturas dos Cartões",
         "📊 Gráficos por Categoria",
     ],
@@ -150,9 +150,208 @@ menu = st.radio(
 st.divider()
 
 # ==========================================
-# ABA 1: FATURAS DOS CARTÕES
+# ABA 1: DESPESAS DE CARTÃO (NOVO LANÇAMENTO)
 # ==========================================
-if menu == "💳 Faturas dos Cartões":
+if menu == "➕ Despesas de Cartão":
+  cartoes_dict, cartao_principal = carregar_cartoes()
+  if not cartoes_dict:
+    st.warning("Nenhum cartão encontrado. Verifique sua tabela de cartões.")
+    st.stop()
+
+  # 1. Seleção do Cartão por Radio (bolinhas)
+  st.markdown("##### 💳 Selecione o Cartão")
+  lista_nomes_cartoes = list(cartoes_dict.keys())
+  cartao_selecionado = st.radio(
+      "Selecione o Cartão",
+      options=lista_nomes_cartoes,
+      index=lista_nomes_cartoes.index(cartao_principal) if cartao_principal in lista_nomes_cartoes else 0,
+      horizontal=True,
+      label_visibility="collapsed"
+  )
+
+  # 2. Campo de Valor com máscara de moeda progressiva
+  if "raw_valor" not in st.session_state:
+    st.session_state.raw_valor = ""
+  if "input_valor_formatado" not in st.session_state:
+    st.session_state.input_valor_formatado = "R$ 0,00"
+  if "valor_numerico" not in st.session_state:
+    st.session_state.valor_numerico = 0.0
+
+
+  def formatar_moeda_input():
+    digitos = "".join(
+        filter(str.isdigit, st.session_state.get("raw_valor", ""))
+    )
+    if not digitos:
+      st.session_state.input_valor_formatado = "R$ 0,00"
+      st.session_state.valor_numerico = 0.0
+      st.session_state.raw_valor = ""
+      return
+
+    val_int = int(digitos)
+    val_float = val_int / 100.0
+    st.session_state.valor_numerico = val_float
+    formatado = (
+        f"R$ {val_float:,.2f}"
+        .replace(",", "X")
+        .replace(".", ",")
+        .replace("X", ".")
+    )
+    st.session_state.input_valor_formatado = formatado
+    st.session_state.raw_valor = formatado
+
+
+  st.text_input(
+      "Valor da despesa cartão (R$)",
+      value=st.session_state.input_valor_formatado,
+      key="raw_valor",
+      on_change=formatar_moeda_input,
+      placeholder="Digite apenas os números...",
+  )
+  valor = st.session_state.valor_numerico
+
+  # 3. Campo Descrição
+  descricao = st.text_input("📝 Descrição", placeholder="Ex: Supermercado, Uber...")
+
+  # 4. Subcategorias em ordem alfabética e Categoria automática
+  subs_lista = carregar_todas_subcategorias_com_categoria()
+  sub_opcoes = [item["sub_desc"] for item in subs_lista] if subs_lista else []
+
+  sub_selecionada = st.selectbox(
+      "📂 Subcategoria",
+      options=sub_opcoes,
+      placeholder="Selecione a subcategoria..."
+  )
+
+  # Identificar a categoria correspondente à subcategoria escolhida
+  id_cat = None
+  id_sub = None
+  cat_desc_exibicao = ""
+  if sub_selecionada and subs_lista:
+    item_encontrado = next((i for i in subs_lista if i["sub_desc"] == sub_selecionada), None)
+    if item_encontrado:
+      id_sub = item_encontrado["id_sub"]
+      id_cat = item_encontrado["id_cat"]
+      cat_desc_exibicao = item_encontrado["cat_desc"]
+
+  st.text_input(
+      "📂 Categoria (Preenchimento Automático)",
+      value=cat_desc_exibicao,
+      disabled=True
+  )
+
+  # 5. Data da compra
+  if "str_data_compra" not in st.session_state:
+    st.session_state.str_data_compra = datetime.now().strftime("%d/%m/%Y")
+
+  col_d1, col_d2 = st.columns(2)
+  with col_d1:
+    if st.button("📅 Hoje", use_container_width=True):
+      st.session_state.str_data_compra = datetime.now().strftime("%d/%m/%Y")
+  with col_d2:
+    if st.button("↩️ Ontem", use_container_width=True):
+      ontem = datetime.now().date() - timedelta(days=1)
+      st.session_state.str_data_compra = ontem.strftime("%d/%m/%Y")
+
+  str_data_digitada = st.text_input(
+      "Data da Compra (DD/MM/AAAA)",
+      value=st.session_state.str_data_compra,
+      max_chars=10,
+      placeholder="DD/MM/AAAA",
+  )
+  st.session_state.str_data_compra = str_data_digitada
+
+  try:
+    data_compra = datetime.strptime(str_data_digitada, "%d/%m/%Y").date()
+  except ValueError:
+    st.error("Formato de data inválido! Utilize estritamente DD/MM/AAAA.")
+    data_compra = None
+
+  parcelado = st.checkbox("🔁 Despesa Parcelada")
+  qtd_parcelas = 1
+  if parcelado:
+    qtd_parcelas = st.selectbox(
+        "Número de parcelas",
+        options=list(range(2, 13)),
+        format_func=lambda x: f"{x}x",
+    )
+
+  st.divider()
+
+  if st.button("✔ Cadastrar Despesa", type="primary", use_container_width=True):
+    if not descricao.strip():
+      st.error("Por favor, preencha a descrição da despesa.")
+    elif not sub_selecionada:
+      st.error("Selecione uma subcategoria.")
+    elif not data_compra:
+      st.error("Corrija o formato da data antes de salvar.")
+    elif valor <= 0:
+      st.error("O valor da despesa deve ser maior que zero.")
+    else:
+      try:
+        id_cartao = cartoes_dict[cartao_selecionado]["id"]
+        conn = conectar_banco()
+        cursor = conn.cursor()
+        desc_base = descricao.strip()
+        agora_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        if parcelado:
+          valor_parcela = valor / qtd_parcelas
+          for i in range(qtd_parcelas):
+            data_parcela = data_compra + relativedelta(months=i)
+            desc_parcela = f"{desc_base} ({i+1}/{qtd_parcelas})"
+            novo_id = str(uuid.uuid4())
+            cursor.execute(
+                """
+                            INSERT INTO lancamentos (id, tipo, valor, recebido, data_lancamento, descricao, id_categoria, id_subcategoria, id_cartao, repeticoes, atualizado_em)
+                            VALUES (?, 'Despesa', ?, 0, ?, ?, ?, ?, ?, ?, ?);
+                        """,
+                (
+                    novo_id,
+                    valor_parcela,
+                    data_parcela.strftime("%Y-%m-%d"),
+                    desc_parcela,
+                    id_cat,
+                    id_sub,
+                    id_cartao,
+                    qtd_parcelas,
+                    agora_ts,
+                ),
+            )
+          st.success(
+              f"Despesa parcelada em {qtd_parcelas}x cadastrada com sucesso!"
+          )
+        else:
+          novo_id = str(uuid.uuid4())
+          cursor.execute(
+              """
+                        INSERT INTO lancamentos (id, tipo, valor, recebido, data_lancamento, descricao, id_categoria, id_subcategoria, id_cartao, repeticoes, atualizado_em)
+                        VALUES (?, 'Despesa', ?, 0, ?, ?, ?, ?, ?, ?, ?);
+                    """,
+              (
+                  novo_id,
+                  valor,
+                  data_compra.strftime("%Y-%m-%d"),
+                  desc_base,
+                  id_cat,
+                  id_sub,
+                  id_cartao,
+                  1,
+                  agora_ts,
+              ),
+          )
+          st.success("✔ Despesa de cartão cadastrada com sucesso!")
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+      except Exception as ex:
+        st.error(f"Erro ao salvar no banco de dados: {ex}")
+
+# ==========================================
+# ABA 2: FATURAS DOS CARTÕES
+# ==========================================
+elif menu == "💳 Faturas dos Cartões":
   hoje = datetime.now()
   lista_meses_opcoes = []
   for i in range(-3, 4):
@@ -267,417 +466,6 @@ if menu == "💳 Faturas dos Cartões":
       st.error(f"Erro ao calcular faturas: {e}")
   else:
     st.info("Nenhum cartão cadastrado.")
-
-# ==========================================
-# ABA 2: NOVA DESPESA CARTÃO & CRUD
-# ==========================================
-elif menu == "➕ Nova Despesa Cartão":
-  st.markdown("### 💳 Nova Despesa de Cartão & CRUD")
-
-  aba_op_cartao = st.radio(
-      "Ação Cartão", ["➕ Nova Despesa", "✏️ Gerenciar / Editar Despesas"], horizontal=True
-  )
-  st.divider()
-
-  if aba_op_cartao == "➕ Nova Despesa":
-    cartoes_dict, cartao_principal = carregar_cartoes()
-    if not cartoes_dict:
-      st.warning("Nenhum cartão encontrado. Verifique sua tabela de cartões.")
-      st.stop()
-
-    # 1. Seleção do Cartão por Radio (bolinhas)
-    st.markdown("##### 💳 Despesas de Cartão")
-    lista_nomes_cartoes = list(cartoes_dict.keys())
-    cartao_selecionado = st.radio(
-        "Selecione o Cartão",
-        options=lista_nomes_cartoes,
-        index=lista_nomes_cartoes.index(cartao_principal) if cartao_principal in lista_nomes_cartoes else 0,
-        horizontal=True,
-        label_visibility="collapsed"
-    )
-
-    # 2. Campo de Valor com máscara de moeda progressiva
-    if "raw_valor" not in st.session_state:
-      st.session_state.raw_valor = ""
-    if "input_valor_formatado" not in st.session_state:
-      st.session_state.input_valor_formatado = "R$ 0,00"
-    if "valor_numerico" not in st.session_state:
-      st.session_state.valor_numerico = 0.0
-
-
-    def formatar_moeda_input():
-      digitos = "".join(
-          filter(str.isdigit, st.session_state.get("raw_valor", ""))
-      )
-      if not digitos:
-        st.session_state.input_valor_formatado = "R$ 0,00"
-        st.session_state.valor_numerico = 0.0
-        st.session_state.raw_valor = ""
-        return
-
-      val_int = int(digitos)
-      val_float = val_int / 100.0
-      st.session_state.valor_numerico = val_float
-      formatado = (
-          f"R$ {val_float:,.2f}"
-          .replace(",", "X")
-          .replace(".", ",")
-          .replace("X", ".")
-      )
-      st.session_state.input_valor_formatado = formatado
-      st.session_state.raw_valor = formatado
-
-
-    st.text_input(
-        "Valor da despesa cartão (R$)",
-        value=st.session_state.input_valor_formatado,
-        key="raw_valor",
-        on_change=formatar_moeda_input,
-        placeholder="Digite apenas os números...",
-    )
-    valor = st.session_state.valor_numerico
-
-    # 3. Campo Descrição
-    descricao = st.text_input("📝 Descrição", placeholder="Ex: Supermercado, Uber...")
-
-    # 4. Subcategorias em ordem alfabética e Categoria automática
-    subs_lista = carregar_todas_subcategorias_com_categoria()
-    sub_opcoes = [item["sub_desc"] for item in subs_lista] if subs_lista else []
-
-    sub_selecionada = st.selectbox(
-        "📂 Subcategoria",
-        options=sub_opcoes,
-        placeholder="Selecione a subcategoria..."
-    )
-
-    # Identificar a categoria correspondente à subcategoria escolhida
-    id_cat = None
-    id_sub = None
-    cat_desc_exibicao = ""
-    if sub_selecionada and subs_lista:
-      item_encontrado = next((i for i in subs_lista if i["sub_desc"] == sub_selecionada), None)
-      if item_encontrado:
-        id_sub = item_encontrado["id_sub"]
-        id_cat = item_encontrado["id_cat"]
-        cat_desc_exibicao = item_encontrado["cat_desc"]
-
-    st.text_input(
-        "📂 Categoria (Preenchimento Automático)",
-        value=cat_desc_exibicao,
-        disabled=True
-    )
-
-    # 5. Data da compra
-    if "str_data_compra" not in st.session_state:
-      st.session_state.str_data_compra = datetime.now().strftime("%d/%m/%Y")
-
-    col_d1, col_d2 = st.columns(2)
-    with col_d1:
-      if st.button("📅 Hoje", use_container_width=True):
-        st.session_state.str_data_compra = datetime.now().strftime("%d/%m/%Y")
-    with col_d2:
-      if st.button("↩️ Ontem", use_container_width=True):
-        ontem = datetime.now().date() - timedelta(days=1)
-        st.session_state.str_data_compra = ontem.strftime("%d/%m/%Y")
-
-    str_data_digitada = st.text_input(
-        "Data da Compra (DD/MM/AAAA)",
-        value=st.session_state.str_data_compra,
-        max_chars=10,
-        placeholder="DD/MM/AAAA",
-    )
-    st.session_state.str_data_compra = str_data_digitada
-
-    try:
-      data_compra = datetime.strptime(str_data_digitada, "%d/%m/%Y").date()
-    except ValueError:
-      st.error("Formato de data inválido! Utilize estritamente DD/MM/AAAA.")
-      data_compra = None
-
-    parcelado = st.checkbox("🔁 Despesa Parcelada")
-    qtd_parcelas = 1
-    if parcelado:
-      qtd_parcelas = st.selectbox(
-          "Número de parcelas",
-          options=list(range(2, 13)),
-          format_func=lambda x: f"{x}x",
-      )
-
-    st.divider()
-
-    if st.button("✔ Cadastrar Despesa", type="primary", use_container_width=True):
-      if not descricao.strip():
-        st.error("Por favor, preencha a descrição da despesa.")
-      elif not sub_selecionada:
-        st.error("Selecione uma subcategoria.")
-      elif not data_compra:
-        st.error("Corrija o formato da data antes de salvar.")
-      elif valor <= 0:
-        st.error("O valor da despesa deve ser maior que zero.")
-      else:
-        try:
-          id_cartao = cartoes_dict[cartao_selecionado]["id"]
-          conn = conectar_banco()
-          cursor = conn.cursor()
-          desc_base = descricao.strip()
-          agora_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-          if parcelado:
-            valor_parcela = valor / qtd_parcelas
-            for i in range(qtd_parcelas):
-              data_parcela = data_compra + relativedelta(months=i)
-              desc_parcela = f"{desc_base} ({i+1}/{qtd_parcelas})"
-              novo_id = str(uuid.uuid4())
-              cursor.execute(
-                  """
-                              INSERT INTO lancamentos (id, tipo, valor, recebido, data_lancamento, descricao, id_categoria, id_subcategoria, id_cartao, repeticoes, atualizado_em)
-                              VALUES (?, 'Despesa', ?, 0, ?, ?, ?, ?, ?, ?, ?);
-                          """,
-                  (
-                      novo_id,
-                      valor_parcela,
-                      data_parcela.strftime("%Y-%m-%d"),
-                      desc_parcela,
-                      id_cat,
-                      id_sub,
-                      id_cartao,
-                      qtd_parcelas,
-                      agora_ts,
-                  ),
-              )
-            st.success(
-                f"Despesa parcelada em {qtd_parcelas}x cadastrada com sucesso!"
-            )
-          else:
-            novo_id = str(uuid.uuid4())
-            cursor.execute(
-                """
-                          INSERT INTO lancamentos (id, tipo, valor, recebido, data_lancamento, descricao, id_categoria, id_subcategoria, id_cartao, repeticoes, atualizado_em)
-                          VALUES (?, 'Despesa', ?, 0, ?, ?, ?, ?, ?, ?, ?);
-                      """,
-                (
-                    novo_id,
-                    valor,
-                    data_compra.strftime("%Y-%m-%d"),
-                    desc_base,
-                    id_cat,
-                    id_sub,
-                    id_cartao,
-                    1,
-                    agora_ts,
-                ),
-            )
-            st.success("✔ Despesa de cartão cadastrada com sucesso!")
-
-          conn.commit()
-          cursor.close()
-          conn.close()
-        except Exception as ex:
-          st.error(f"Erro ao salvar no banco de dados: {ex}")
-
-  else:  # Gerenciar / Editar Despesas de Cartão
-    st.subheader("✏️ Gerenciar Despesas de Cartão")
-
-    cartoes_dict, _ = carregar_cartoes()
-    if not cartoes_dict:
-      st.warning("Nenhum cartão cadastrado.")
-    else:
-      hoje = datetime.now()
-      lista_meses_opcoes = []
-      for i in range(-3, 4):
-        m_ref = hoje + relativedelta(months=i)
-        lista_meses_opcoes.append(m_ref.strftime("%Y-%m"))
-
-
-      def formatar_mes_pt(ano_mes):
-        ano, mes = ano_mes.split("-")
-        return f"{meses_pt.get(int(mes), mes)} de {ano}"
-
-
-      mes_atual_str = hoje.strftime("%Y-%m")
-      indice_atual = (
-          lista_meses_opcoes.index(mes_atual_str)
-          if mes_atual_str in lista_meses_opcoes
-          else 3
-      )
-
-      mes_selecionado_c = st.selectbox(
-          "📅 Mês de Referência",
-          options=lista_meses_opcoes,
-          index=indice_atual,
-          format_func=formatar_mes_pt,
-          key="mes_filtro_cartao",
-      )
-
-      opcoes_filtro_cartoes = ["Todos os cartões"] + list(cartoes_dict.keys())
-      cartao_filtro_escolhida = st.selectbox(
-          "💳 Filtrar por Cartão",
-          options=opcoes_filtro_cartoes,
-          key="cartao_filtro_cartao",
-      )
-
-      try:
-        conn = conectar_banco()
-        cursor = conn.cursor()
-
-        if cartao_filtro_escolhida == "Todos os cartões":
-          cursor.execute(
-              """
-                  SELECT l.id, l.data_lancamento, l.descricao, c.nome, l.valor 
-                  FROM lancamentos l
-                  JOIN cartoes c ON l.id_cartao = c.id
-                  WHERE l.id_cartao IS NOT NULL AND SUBSTR(l.data_lancamento, 1, 7) = ?
-                  ORDER BY l.data_lancamento ASC;
-              """,
-              (mes_selecionado_c,),
-          )
-          lista_regs_cartao = cursor.fetchall()
-        else:
-          id_cartao_selecionado = cartoes_dict[cartao_filtro_escolhida]["id"]
-          cursor.execute(
-              """
-                  SELECT l.id, l.data_lancamento, l.descricao, c.nome, l.valor 
-                  FROM lancamentos l
-                  JOIN cartoes c ON l.id_cartao = c.id
-                  WHERE l.id_cartao = ? AND SUBSTR(l.data_lancamento, 1, 7) = ?
-                  ORDER BY l.data_lancamento ASC;
-              """,
-              (id_cartao_selecionado, mes_selecionado_c),
-          )
-          lista_regs_cartao = cursor.fetchall()
-
-        cursor.close()
-        conn.close()
-
-        if not lista_regs_cartao:
-          st.info(
-              "Nenhuma despesa de cartão encontrada para este mês e filtros"
-              " selecionados."
-          )
-        else:
-          opcoes_map_cartao = {}
-          for row in lista_regs_cartao:
-            lid, d_data, l_desc, c_nome, l_val = row
-            d_fmt = (
-                datetime.strptime(d_data.split()[0], "%Y-%m-%d").strftime(
-                    "%d/%m/%Y"
-                )
-                if d_data
-                else ""
-            )
-            rotulo = f"[{d_fmt}] {c_nome} | {l_desc} (R$ {float(l_val or 0):,.2f})"
-            opcoes_map_cartao[rotulo] = lid
-
-          escolha_lanc_cartao = st.selectbox(
-              "Selecione uma despesa para alterar ou excluir",
-              options=list(opcoes_map_cartao.keys()),
-              key="select_lanc_cartao",
-          )
-          id_selecionado_cartao = opcoes_map_cartao[escolha_lanc_cartao]
-
-          conn = conectar_banco()
-          cursor = conn.cursor()
-          cursor.execute(
-              """
-                  SELECT id, valor, data_lancamento, descricao, id_cartao, id_categoria, id_subcategoria
-                  FROM lancamentos WHERE id = ?;
-              """,
-              (id_selecionado_cartao,),
-          )
-          reg_cartao_atual = cursor.fetchone()
-          cursor.close()
-          conn.close()
-
-          if reg_cartao_atual:
-            _, rc_val, rc_data, rc_desc, rc_cartao_id, rc_cat, rc_sub = (
-                reg_cartao_atual
-            )
-
-            try:
-              dt_parse_c = datetime.strptime(
-                  rc_data.split()[0], "%Y-%m-%d"
-              ).date()
-            except Exception:
-              dt_parse_c = date.today()
-
-            st.markdown("---")
-            st.markdown("### 📝 Editar ou Excluir Despesa de Cartão")
-
-            nova_desc_c = st.text_input(
-                "Descrição", value=rc_desc or "", key=f"edit_desc_{id_selecionado_cartao}"
-            )
-            novo_valor_c = st.number_input(
-                "Valor (R$)",
-                min_value=0.0,
-                value=float(rc_val or 0.0),
-                step=1.0,
-                key=f"edit_val_{id_selecionado_cartao}",
-            )
-            nova_data_obj_c = st.date_input(
-                "Data da Compra",
-                value=dt_parse_c,
-                format="DD/MM/YYYY",
-                key=f"edit_data_{id_selecionado_cartao}",
-            )
-
-            col_bc1, col_bc2 = st.columns(2)
-            with col_bc1:
-              if st.button(
-                  "💾 Salvar Alterações",
-                  type="primary",
-                  use_container_width=True,
-                  key=f"btn_salvar_{id_selecionado_cartao}",
-              ):
-                try:
-                  conn = conectar_banco()
-                  cursor = conn.cursor()
-                  agora_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                  cursor.execute(
-                      """
-                                  UPDATE lancamentos 
-                                  SET descricao = ?, valor = ?, data_lancamento = ?, atualizado_em = ?
-                                  WHERE id = ?;
-                              """,
-                      (
-                          nova_desc_c,
-                          novo_valor_c,
-                          nova_data_obj_c.strftime("%Y-%m-%d"),
-                          agora_ts,
-                          id_selecionado_cartao,
-                      ),
-                  )
-                  conn.commit()
-                  cursor.close()
-                  conn.close()
-                  st.success("✔ Despesa de cartão atualizada com sucesso!")
-                  st.rerun()
-                except Exception as ex:
-                  st.error(f"Erro ao atualizar: {ex}")
-
-            with col_bc2:
-              if st.button(
-                  "🗑️ Excluir Despesa",
-                  type="secondary",
-                  use_container_width=True,
-                  key=f"btn_excluir_{id_selecionado_cartao}",
-              ):
-                try:
-                  conn = conectar_banco()
-                  cursor = conn.cursor()
-                  cursor.execute(
-                      "DELETE FROM lancamentos WHERE id = ?;",
-                      (id_selecionado_cartao,),
-                  )
-                  conn.commit()
-                  cursor.close()
-                  conn.close()
-                  st.success("🗑️ Despesa excluída com sucesso!")
-                  st.rerun()
-                except Exception as ex:
-                  st.error(f"Erro ao excluir: {ex}")
-
-      except Exception as e:
-        st.error(f"Erro ao carregar lista de despesas de cartão: {e}")
 
 # ==========================================
 # ABA 3: GRÁFICOS POR CATEGORIA E SUBCATEGORIA
@@ -821,7 +609,6 @@ elif menu == "📊 Gráficos por Categoria":
       )
       dados_cat = cursor_db.fetchall()
     else:
-      # Para "Todos", iteramos pelos ciclos consolidados por mês baseados na data de lançamento
       _, mes_ref_val = ciclo_selecionado
       if isinstance(mes_ref_val, str):
         mes_ano_str = mes_ref_val
