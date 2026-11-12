@@ -1,4 +1,4 @@
-d# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 from datetime import date, datetime, timedelta
 from dateutil.relativedelta import relativedelta
 from zoneinfo import ZoneInfo
@@ -737,7 +737,6 @@ elif menu == "⚙️ Categorias e Subcategorias":
         with st.expander(f"📂 {sdesc} (Categoria: {scat_desc})"):
           edit_sub_desc = st.text_input("Editar Descrição", value=sdesc, key=f"edit_sub_{sid}")
           
-          # Seletor para alterar a categoria pai, se desejado
           cat_opcoes_map = {row[1]: row[0] for row in lista_cats_select}
           cat_atual_nome = scat_desc
           nova_cat_pai_escolhida = st.selectbox(
