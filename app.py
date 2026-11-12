@@ -1,10 +1,9 @@
-# -*- coding: utf-8 -*-
+d# -*- coding: utf-8 -*-
 from datetime import date, datetime, timedelta
 from dateutil.relativedelta import relativedelta
 from zoneinfo import ZoneInfo
 import calendar
 import libsql
-import matplotlib.pyplot as plt
 import streamlit as st
 import uuid
 
@@ -45,7 +44,7 @@ def conectar_banco():
     TURSO_TOKEN = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3OTIxNzI0NzEsImlkIjoiMDFhMTQ1YmUtZTAwMS03MWY5LTlmMWUtZmFkYTJkZDhhNmEyIiwia2lkIjoiODRpRll2SGxCQ01qVGxyWXVMR0xfUUtWY3E0N1dmWUVxRUxBSTdSNkFqQSIsInJpZCI6IjU1NmQ3ZmUxLTRjZTAtNGZlZi1hMTIzLTEzYzM0ODY5NDFhYiJ9.KqPYdc5g76qkjqBOqhkP3aF3PoLqhIUugJZG8-70X7_nuUv0L60yNxCmbyGNnUXBOeqCJ1_Gx039rl-dDloPCA"
     conn = libsql.connect(TURSO_URL, auth_token=TURSO_TOKEN)
 
-  # Garante que a coluna atualizado_em existe na tabela lancamentos
+  # Garante que colunas de controle essenciais existem
   try:
     cursor = conn.cursor()
     cursor.execute("ALTER TABLE lancamentos ADD COLUMN atualizado_em TEXT;")
@@ -143,7 +142,7 @@ menu = st.radio(
     [
         "➕ Despesas de Cartão",
         "💳 Faturas dos Cartões",
-        "📊 Gráficos por Categoria",
+        "⚙️ Categorias e Subcategorias",
     ],
     horizontal=True,
     label_visibility="collapsed",
@@ -294,7 +293,6 @@ if menu == "➕ Despesas de Cartão":
         cursor = conn.cursor()
         desc_base = descricao.strip()
         
-        # Força o fuso horário de Brasília para o carimbo de sincronização
         fuso_br = ZoneInfo("America/Sao_Paulo")
         agora_ts = datetime.now(fuso_br).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -602,300 +600,183 @@ elif menu == "💳 Faturas dos Cartões":
     st.info("Nenhum cartão cadastrado.")
 
 # ==========================================
-# ABA 3: GRÁFICOS POR CATEGORIA E SUBCATEGORIA
+# ABA 3: CRUD DE CATEGORIAS E SUBCATEGORIAS
 # ==========================================
-elif menu == "📊 Gráficos por Categoria":
-  st.markdown("### 📊 Análise Gráfica")
+elif menu == "⚙️ Categorias e Subcategorias":
+  st.markdown("### ⚙️ Gerenciamento de Categorias e Subcategorias")
+  
+  aba_cat, aba_sub = st.tabs(["📁 Gerenciar Categorias", "📂 Gerenciar Subcategorias"])
 
-  try:
-    conn_g = conectar_banco()
-    cursor_g = conn_g.cursor()
-    cursor_g.execute(
-        "SELECT id, nome, dia_fechamento, dia_vencimento FROM cartoes ORDER BY"
-        " nome;"
-    )
-    cartoes_db = cursor_g.fetchall()
-    cursor_g.close()
-    conn_g.close()
-  except Exception:
-    cartoes_db = []
+  fuso_br = ZoneInfo("America/Sao_Paulo")
+  agora_ts = datetime.now(fuso_br).strftime("%Y-%m-%d %H:%M:%S")
 
-  map_cartoes = {}
-  map_cartao_detalhes = {}
-  nomes_cartoes = ["Todos"]
-  for cid, cnome, c_fech, c_venc in cartoes_db:
-    map_cartoes[cnome] = str(cid)
-    map_cartao_detalhes[str(cid)] = {
-        "fechamento": c_fech or 24,
-        "vencimento": c_venc or 1,
-    }
-    nomes_cartoes.append(cnome)
-
-  sel_cartao = st.selectbox("💳 Cartão", options=nomes_cartoes)
-
-  is_cartao = sel_cartao != "Todos"
-  cartao_id = map_cartoes.get(sel_cartao) if is_cartao else None
-
-  ciclos = []
-  if is_cartao and cartao_id:
-    detalhes = map_cartao_detalhes.get(cartao_id, {"fechamento": 24})
-    fechamento_dia = detalhes["fechamento"]
-    try:
-      conn_c = conectar_banco()
-      cursor_c = conn_c.cursor()
-      cursor_c.execute(
-          "SELECT MIN(data_lancamento), MAX(data_lancamento) FROM lancamentos"
-          " WHERE id_cartao = ?;",
-          (cartao_id,),
-      )
-      res_c = cursor_c.fetchone()
-      cursor_c.close()
-      conn_c.close()
-
-      def para_date(val):
-        if not val:
-          return None
-        if isinstance(val, str):
-          try:
-            return datetime.strptime(val.split()[0], "%Y-%m-%d").date()
-          except ValueError:
-            return None
-        if hasattr(val, "date"):
-          return val.date()
-        return val
-
-      min_data = (
-          para_date(res_c[0])
-          if res_c and res_c[0]
-          else date.today() - relativedelta(months=3)
-      )
-      max_data = (
-          para_date(res_c[1])
-          if res_c and res_c[1]
-          else date.today() + relativedelta(months=6)
-      )
-      if not min_data:
-        min_data = date.today() - relativedelta(months=3)
-      if not max_data:
-        max_data = date.today() + relativedelta(months=6)
-
-      curr_date = date(min_data.year, min_data.month, 1)
-      end_date = date(max_data.year, max_data.month, 1) + relativedelta(
-          months=2
-      )
-
-      while curr_date <= end_date:
-        r_ano = curr_date.year
-        r_mes = curr_date.month
-        max_d_fim = calendar.monthrange(r_ano, r_mes)[1]
-        data_fim = date(r_ano, r_mes, min(fechamento_dia, max_d_fim))
-        data_ini = data_fim - relativedelta(months=1) + relativedelta(days=1)
-
-        mes_nome = meses_pt.get(data_fim.month, str(data_fim.month))
-        rotulo = (
-            f"Fatura {mes_nome}/{data_fim.year} ({data_ini.strftime('%d/%m/%Y')}"
-            f" a {data_fim.strftime('%d/%m/%Y')})"
-        )
-        ciclos.append((rotulo, data_ini, data_fim))
-        curr_date += relativedelta(months=1)
-    except Exception:
-      pass
-  else:
-    hoje = datetime.now(ZoneInfo("America/Sao_Paulo")).date()
-    for i in range(-3, 12):
-      m_ref = hoje + relativedelta(months=i)
-      mes_nome = meses_pt.get(m_ref.month, str(m_ref.month))
-      rotulo = f"{mes_nome} de {m_ref.year}"
-      ciclos.append((rotulo, m_ref))
-
-  if not ciclos:
-    ciclos = [("Mês Atual", datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%Y-%m"))]
-
-  sel_ciclo_txt = st.selectbox(
-      "📅 Período / Ciclo", options=[c[0] for c in ciclos]
-  )
-  ciclo_selecionado = next(c for c in ciclos if c[0] == sel_ciclo_txt)
-
-  st.divider()
-
-  try:
-    conn_db = conectar_banco()
-    cursor_db = conn_db.cursor()
-
-    dados_cat = []
-    if is_cartao and cartao_id:
-      _, d_ini, d_fim = ciclo_selecionado
-      cursor_db.execute(
-          """
-                SELECT c.id_categoria, c.descricao, SUM(l.valor) 
-                FROM lancamentos l
-                JOIN categorias c ON l.id_categoria = c.id_categoria
-                WHERE l.tipo = 'Despesa' AND l.id_cartao = ? 
-                  AND l.data_lancamento >= ? AND l.data_lancamento <= ?
-                GROUP BY c.id_categoria, c.descricao 
-                ORDER BY SUM(l.valor) DESC;
-            """,
-          (
-              cartao_id,
-              d_ini.strftime("%Y-%m-%d") if hasattr(d_ini, "strftime") else str(d_ini),
-              d_fim.strftime("%Y-%m-%d") if hasattr(d_fim, "strftime") else str(d_fim),
-          ),
-      )
-      dados_cat = cursor_db.fetchall()
-    else:
-      _, mes_ref_val = ciclo_selecionado
-      if isinstance(mes_ref_val, str):
-        mes_ano_str = mes_ref_val
+  # --- GESTÃO DE CATEGORIAS ---
+  with aba_cat:
+    st.markdown("#### ➕ Nova Categoria")
+    nova_cat_desc = st.text_input("Descrição da Categoria", placeholder="Ex: Alimentação, Lazer...", key="input_nova_cat")
+    
+    if st.button("Cadastrar Categoria", type="primary"):
+      if not nova_cat_desc.strip():
+        st.error("Informe a descrição da categoria.")
       else:
-        mes_ano_str = mes_ref_val.strftime("%Y-%m")
-
-      cursor_db.execute(
-          """
-                SELECT c.id_categoria, c.descricao, SUM(l.valor) 
-                FROM lancamentos l
-                JOIN categorias c ON l.id_categoria = c.id_categoria
-                WHERE l.tipo = 'Despesa' AND l.id_cartao IS NOT NULL 
-                  AND SUBSTR(l.data_lancamento, 1, 7) = ?
-                GROUP BY c.id_categoria, c.descricao 
-                ORDER BY SUM(l.valor) DESC;
-            """,
-          (mes_ano_str,),
-      )
-      dados_cat = cursor_db.fetchall()
-
-    if dados_cat:
-      cats = [item[1] for item in dados_cat]
-      valores_cat = [float(item[2]) for item in dados_cat]
-      soma_total = sum(valores_cat)
-
-      valor_fmt = (
-          f"R$ {soma_total:,.2f}"
-          .replace(",", "X")
-          .replace(".", ",")
-          .replace("X", ".")
-      )
-      if is_cartao:
-        st.info(
-            f"💳 Total das despesas do cartão **{sel_cartao}**: **{valor_fmt}**"
-        )
-      else:
-        st.info(f"📊 Total geral de gastos dos cartões: **{valor_fmt}**")
-
-      fig1, ax1 = plt.subplots(figsize=(8, 4.5))
-      bars1 = ax1.bar(
-          cats,
-          valores_cat,
-          color=["#2B6CB0", "#319795", "#D69E2E", "#DD6B20", "#C53030"],
-      )
-      ax1.set_title(
-          f"Despesas por Categoria ({sel_cartao})",
-          fontsize=10,
-          fontweight="bold",
-          color="#1A365D",
-      )
-      ax1.tick_params(axis="x", labelsize=8, rotation=30)
-      ax1.tick_params(axis="y", labelsize=8)
-      ax1.grid(axis="y", linestyle=":", alpha=0.6)
-
-      for bar in bars1:
-        h = bar.get_height()
-        ax1.annotate(
-            f"R$ {h:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
-            xy=(bar.get_x() + bar.get_width() / 2, h),
-            xytext=(0, 3),
-            textcoords="offset points",
-            ha="center",
-            va="bottom",
-            fontsize=7,
-            fontweight="bold",
-            rotation=25,
-        )
-
-      fig1.tight_layout()
-      st.pyplot(fig1)
-
-      nomes_cats_disponiveis = [item[1] for item in dados_cat]
-      cat_escolhida_nome = st.selectbox(
-          "🔍 Escolha a Categoria para ver as Subcategorias",
-          options=nomes_cats_disponiveis,
-      )
-      cat_escolhida_id = next(
-          item[0] for item in dados_cat if item[1] == cat_escolhida_nome
-      )
-
-      dados_sub = []
-      if is_cartao and cartao_id:
-        _, d_ini, d_fim = ciclo_selecionado
-        cursor_db.execute(
-            """
-                    SELECT s.descricao, SUM(l.valor) 
-                    FROM lancamentos l
-                    JOIN subcategorias s ON l.id_subcategoria = s.id_subcategoria
-                    WHERE l.tipo = 'Despesa' AND l.id_cartao = ? AND l.id_categoria = ?
-                      AND l.data_lancamento >= ? AND l.data_lancamento <= ?
-                    GROUP BY s.descricao ORDER BY SUM(l.valor) ASC;
-                """,
-            (
-                cartao_id,
-                cat_escolhida_id,
-                d_ini.strftime("%Y-%m-%d") if hasattr(d_ini, "strftime") else str(d_ini),
-                d_fim.strftime("%Y-%m-%d") if hasattr(d_fim, "strftime") else str(d_fim),
-            ),
-        )
-        dados_sub = cursor_db.fetchall()
-      else:
-        _, mes_ref_val = ciclo_selecionado
-        mes_ano_str = mes_ref_val if isinstance(mes_ref_val, str) else mes_ref_val.strftime("%Y-%m")
-        cursor_db.execute(
-            """
-                    SELECT s.descricao, SUM(l.valor) 
-                    FROM lancamentos l
-                    JOIN subcategorias s ON l.id_subcategoria = s.id_subcategoria
-                    WHERE l.tipo = 'Despesa' AND l.id_cartao IS NOT NULL AND l.id_categoria = ?
-                      AND SUBSTR(l.data_lancamento, 1, 7) = ?
-                    GROUP BY s.descricao ORDER BY SUM(l.valor) ASC;
-                """,
-            (cat_escolhida_id, mes_ano_str),
-        )
-        dados_sub = cursor_db.fetchall()
-
-      if dados_sub:
-        subs = [item[0] for item in dados_sub]
-        valores_sub = [float(item[1]) for item in dados_sub]
-
-        fig2, ax2 = plt.subplots(figsize=(8, 4))
-        bars2 = ax2.barh(subs, valores_sub, color="#805AD5")
-        ax2.set_title(
-            f"Subcategorias de: {cat_escolhida_nome}",
-            fontsize=10,
-            fontweight="bold",
-            color="#1A365D",
-        )
-        ax2.tick_params(axis="both", labelsize=8)
-        ax2.grid(axis="x", linestyle=":", alpha=0.6)
-
-        for bar in bars2:
-          w = bar.get_width()
-          ax2.annotate(
-              f"R$ {w:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
-              xy=(w, bar.get_y() + bar.get_height() / 2),
-              xytext=(5, 0),
-              textcoords="offset points",
-              ha="left",
-              va="center",
-              fontsize=8,
-              fontweight="bold",
+        try:
+          conn = conectar_banco()
+          cursor = conn.cursor()
+          novo_id_cat = str(uuid.uuid4())
+          cursor.execute(
+              "INSERT INTO categorias (id_categoria, created_at, descricao, atualizado_em) VALUES (?, ?, ?, ?);",
+              (novo_id_cat, agora_ts, nova_cat_desc.strip(), agora_ts)
           )
+          conn.commit()
+          cursor.close()
+          conn.close()
+          st.success("Categoria cadastrada com sucesso!")
+          st.rerun()
+        except Exception as ex:
+          st.error(f"Erro ao salvar categoria: {ex}")
 
-        fig2.tight_layout()
-        st.pyplot(fig2)
+    st.divider()
+    st.markdown("#### 📋 Categorias Cadastradas")
+    try:
+      conn = conectar_banco()
+      cursor = conn.cursor()
+      cursor.execute("SELECT id_categoria, descricao FROM categorias ORDER BY descricao ASC;")
+      cats_db = cursor.fetchall()
+      cursor.close()
+      conn.close()
+
+      if cats_db:
+        for cid_cat, cdesc in cats_db:
+          with st.expander(f"📁 {cdesc}"):
+            edit_cat_desc = st.text_input("Editar Descrição", value=cdesc, key=f"edit_cat_{cid_cat}")
+            col_e1, col_e2 = st.columns(2)
+            with col_e1:
+              if st.button("💾 Salvar Alteração", key=f"btn_salv_cat_{cid_cat}"):
+                try:
+                  conn = conectar_banco()
+                  cursor = conn.cursor()
+                  cursor.execute("UPDATE categorias SET descricao = ?, atualizado_em = ? WHERE id_categoria = ?;", (edit_cat_desc.strip(), agora_ts, cid_cat))
+                  conn.commit()
+                  cursor.close()
+                  conn.close()
+                  st.success("Categoria atualizada!")
+                  st.rerun()
+                except Exception as ex:
+                  st.error(f"Erro ao atualizar: {ex}")
+            with col_e2:
+              if st.button("🗑️ Excluir", key=f"btn_del_cat_{cid_cat}", type="secondary"):
+                try:
+                  conn = conectar_banco()
+                  cursor = conn.cursor()
+                  cursor.execute("DELETE FROM categorias WHERE id_categoria = ?;", (cid_cat,))
+                  conn.commit()
+                  cursor.close()
+                  conn.close()
+                  st.success("Categoria excluída!")
+                  st.rerun()
+                except Exception as ex:
+                  st.error(f"Erro ao excluir (verifique se há dependências): {ex}")
       else:
-        st.info(f"Nenhuma subcategoria registrada para '{cat_escolhida_nome}'.")
+        st.info("Nenhuma categoria cadastrada.")
+    except Exception as e:
+      st.error(f"Erro ao carregar categorias: {e}")
 
+  # --- GESTÃO DE SUBCATEGORIAS ---
+  with aba_sub:
+    st.markdown("#### ➕ Nova Subcategoria")
+    
+    try:
+      conn = conectar_banco()
+      cursor = conn.cursor()
+      cursor.execute("SELECT id_categoria, descricao FROM categorias ORDER BY descricao ASC;")
+      lista_cats_select = cursor.fetchall()
+      cursor.close()
+      conn.close()
+    except Exception:
+      lista_cats_select = []
+
+    if not lista_cats_select:
+      st.warning("Cadastre ao menos uma categoria antes de gerenciar subcategorias.")
     else:
-      st.info("Nenhuma despesa encontrada para este filtro e período.")
+      cat_dict_map = {row[1]: row[0] for row in lista_cats_select}
+      cat_escolhida_para_sub = st.selectbox("Selecione a Categoria Pai", options=list(cat_dict_map.keys()), key="select_cat_pai")
+      nova_sub_desc = st.text_input("Descrição da Subcategoria", placeholder="Ex: Supermercado, Restaurante...", key="input_nova_sub")
 
-    cursor_db.close()
-    conn_db.close()
-  except Exception as e:
-    st.error(f"Erro ao gerar gráficos: {e}")
+      if st.button("Cadastrar Subcategoria", type="primary"):
+        if not nova_sub_desc.strip():
+          st.error("Informe a descrição da subcategoria.")
+        else:
+          try:
+            id_cat_pai = cat_dict_map[cat_escolhida_para_sub]
+            conn = conectar_banco()
+            cursor = conn.cursor()
+            novo_id_sub = str(uuid.uuid4())
+            cursor.execute(
+                "INSERT INTO subcategorias (id_subcategoria, created_at, descricao, id_categoria, atualizado_em) VALUES (?, ?, ?, ?, ?);",
+                (novo_id_sub, agora_ts, nova_sub_desc.strip(), id_cat_pai, agora_ts)
+            )
+            conn.commit()
+            cursor.close()
+            conn.close()
+            st.success("Subcategoria cadastrada com sucesso!")
+            st.rerun()
+          except Exception as ex:
+            st.error(f"Erro ao salvar subcategoria: {ex}")
+
+    st.divider()
+    st.markdown("#### 📋 Subcategorias Cadastradas")
+    subs_com_cat = carregar_todas_subcategorias_com_categoria()
+    
+    if subs_com_cat:
+      for item in subs_com_cat:
+        sid = item["id_sub"]
+        sdesc = item["sub_desc"]
+        scat_desc = item["cat_desc"]
+        scat_id = item["id_cat"]
+
+        with st.expander(f"📂 {sdesc} (Categoria: {scat_desc})"):
+          edit_sub_desc = st.text_input("Editar Descrição", value=sdesc, key=f"edit_sub_{sid}")
+          
+          # Seletor para alterar a categoria pai, se desejado
+          cat_opcoes_map = {row[1]: row[0] for row in lista_cats_select}
+          cat_atual_nome = scat_desc
+          nova_cat_pai_escolhida = st.selectbox(
+              "Alterar Categoria", 
+              options=list(cat_opcoes_map.keys()), 
+              index=list(cat_opcoes_map.keys()).index(cat_atual_nome) if cat_atual_nome in cat_opcoes_map else 0,
+              key=f"edit_sub_cat_{sid}"
+          )
+          novo_id_cat_pai = cat_opcoes_map[nova_cat_pai_escolhida]
+
+          col_s1, col_s2 = st.columns(2)
+          with col_s1:
+            if st.button("💾 Salvar Alteração", key=f"btn_salv_sub_{sid}"):
+              try:
+                conn = conectar_banco()
+                cursor = conn.cursor()
+                cursor.execute(
+                    "UPDATE subcategorias SET descricao = ?, id_categoria = ?, atualizado_em = ? WHERE id_subcategoria = ?;",
+                    (edit_sub_desc.strip(), novo_id_cat_pai, agora_ts, sid)
+                )
+                conn.commit()
+                cursor.close()
+                conn.close()
+                st.success("Subcategoria atualizada!")
+                st.rerun()
+              except Exception as ex:
+                st.error(f"Erro ao atualizar: {ex}")
+          with col_s2:
+            if st.button("🗑️ Excluir", key=f"btn_del_sub_{sid}", type="secondary"):
+              try:
+                conn = conectar_banco()
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM subcategorias WHERE id_subcategoria = ?;", (sid,))
+                conn.commit()
+                cursor.close()
+                conn.close()
+                st.success("Subcategoria excluída!")
+                st.rerun()
+              except Exception as ex:
+                st.error(f"Erro ao excluir: {ex}")
+    else:
+      st.info("Nenhuma subcategoria cadastrada.")
