@@ -6,3 +6,4 @@ google-genai
 pillow
 rapidocr-onnxruntime
 opencv-python-headless
+pytesseract
