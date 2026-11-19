@@ -4,3 +4,4 @@ python-dateutil
 matplotlib
 google-genai
 pillow
+rapidocr-onnxruntime

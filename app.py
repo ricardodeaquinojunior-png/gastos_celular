@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 import calendar
 from datetime import date, datetime, timedelta
-import json
+from io import BytesIO
 import re
 import uuid
 from zoneinfo import ZoneInfo
 
 from dateutil.relativedelta import relativedelta
-from google import genai
-from google.genai import types
 import libsql
+from PIL import Image
+from rapidocr_onnxruntime import RapidOCR
 import streamlit as st
 
 # Configuração da página para dispositivos móveis
@@ -61,72 +61,68 @@ def conectar_banco():
   return conn
 
 
-def obter_gemini_api_key():
-  try:
-    if "GEMINI_API_KEY" in st.secrets and st.secrets["GEMINI_API_KEY"]:
-      return st.secrets["GEMINI_API_KEY"]
-    if "gemini" in st.secrets and "api_key" in st.secrets["gemini"]:
-      return st.secrets["gemini"]["api_key"]
-  except Exception:
-    pass
-  return None
+@st.cache_resource
+def obter_leitor_ocr():
+  return RapidOCR()
 
 
 def extrair_dados_print_notificacao(uploaded_file):
-  api_key = obter_gemini_api_key()
-  if not api_key:
-    raise RuntimeError(
-        "Chave GEMINI_API_KEY não encontrada em st.secrets."
+  img_bytes = uploaded_file.getvalue()
+  pil_img = Image.open(BytesIO(img_bytes)).convert("RGB")
+
+  # Amplia um pouco a imagem para facilitar a leitura de fontes pequenas
+  largura, altura = pil_img.size
+  if largura < 1200:
+    escala = 1200 / max(largura, 1)
+    pil_img = pil_img.resize(
+        (int(largura * escala), int(altura * escala)), Image.Resampling.LANCZOS
     )
 
-  img_bytes = uploaded_file.getvalue()
-  mime_type = uploaded_file.type or "image/png"
+  ocr = obter_leitor_ocr()
+  resultado, _ = ocr(pil_img)
 
-  client = genai.Client(api_key=api_key)
-  prompt = """
-Analise este print de notificação de compra em cartão e extraia os dados.
-Responda APENAS com um JSON válido contendo exatamente estas chaves:
-{
-  "valor": 0.00,
-  "local": "",
-  "data": "DD/MM/AAAA"
-}
+  linhas_ocr = []
+  if resultado:
+    for item in resultado:
+      if len(item) >= 2 and item[1]:
+        linhas_ocr.append(str(item[1]).strip())
 
-Regras:
-- "valor": número decimal (float) usando ponto como separador decimal (ex: 213.16). Se não encontrar, use 0.0.
-- "local": apenas o nome do estabelecimento ou local da compra, sem horário e sem palavras extras como "em " ou ", foi aprovada.".
-- "data": data da compra no formato DD/MM/AAAA, se aparecer no texto. Se não aparecer, use "".
-"""
+  texto_completo = " ".join(linhas_ocr)
+  texto_normalizado = re.sub(r"\s+", " ", texto_completo).strip()
 
-  response = client.models.generate_content(
-      model="gemini-2.5-flash",
-      contents=[
-          types.Part.from_bytes(data=img_bytes, mime_type=mime_type),
-          prompt,
-      ],
-      config=types.GenerateContentConfig(
-          response_mime_type="application/json",
-          temperature=0.1,
-      ),
+  # 1. Valor (ex.: R$ 213,16 ou 213,16)
+  valor_float = 0.0
+  match_valor = re.search(
+      r"(?:R\$|\$)?\s*(\d{1,3}(?:[.,]\d{3})*,\d{2})", texto_normalizado
   )
+  if match_valor:
+    val_limpo = match_valor.group(1).replace(".", "").replace(",", ".")
+    try:
+      valor_float = float(val_limpo)
+    except ValueError:
+      valor_float = 0.0
 
-  texto_resp = (response.text or "").strip()
-  match = re.search(r"\{.*\}", texto_resp, re.DOTALL)
-  json_str = match.group(0) if match else texto_resp
-  dados = json.loads(json_str)
+  # 2. Data no formato DD/MM/AAAA
+  data_extraida = ""
+  match_data = re.search(r"\b(\d{2}/\d{2}/\d{4})\b", texto_normalizado)
+  if match_data:
+    data_extraida = match_data.group(1)
 
-  try:
-    val_float = float(dados.get("valor") or 0.0)
-  except (TypeError, ValueError):
-    val_float = 0.0
-
-  local = str(dados.get("local") or "").strip()
-  data_extraida = str(dados.get("data") or "").strip()
+  # 3. Estabelecimento/local após "em " e antes de ", foi aprovada" (ou fim)
+  local = ""
+  match_local = re.search(
+      r"\bem\s+(.+?)(?:,\s*foi\s+aprovada\.?|$)",
+      texto_normalizado,
+      flags=re.IGNORECASE,
+  )
+  if match_local:
+    local = match_local.group(1).strip(" ,.")
 
   return {
-      "valor": val_float,
+      "valor": valor_float,
       "descricao": local,
       "data": data_extraida,
+      "texto_lido": texto_normalizado,
   }
 
 
@@ -246,7 +242,7 @@ if menu == "➕ Despesas de Cartão":
         ZoneInfo("America/Sao_Paulo")
     ).strftime("%d/%m/%Y")
 
-  # Leitura opcional de print da notificação
+  # Leitura opcional de print da notificação via OCR (sem chave de API)
   with st.expander("📸 Capturar dados do print da notificação", expanded=False):
     print_arquivo = st.file_uploader(
         "Envie o print da notificação do cartão",
@@ -256,7 +252,7 @@ if menu == "➕ Despesas de Cartão":
     if print_arquivo is not None:
       if st.button("✨ Preencher campos pelo print", use_container_width=True):
         try:
-          with st.spinner("Lendo print com inteligência artificial..."):
+          with st.spinner("Lendo texto da imagem..."):
             extraido = extrair_dados_print_notificacao(print_arquivo)
 
           val_num = extraido["valor"]
