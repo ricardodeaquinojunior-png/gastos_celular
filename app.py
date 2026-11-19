@@ -8,8 +8,8 @@ from zoneinfo import ZoneInfo
 
 from dateutil.relativedelta import relativedelta
 import libsql
-from PIL import Image
-from rapidocr_onnxruntime import RapidOCR
+from PIL import Image, ImageOps
+import pytesseract
 import streamlit as st
 
 # Configuração da página para dispositivos móveis
@@ -61,33 +61,25 @@ def conectar_banco():
   return conn
 
 
-@st.cache_resource
-def obter_leitor_ocr():
-  return RapidOCR()
-
-
 def extrair_dados_print_notificacao(uploaded_file):
   img_bytes = uploaded_file.getvalue()
-  pil_img = Image.open(BytesIO(img_bytes)).convert("RGB")
+  pil_img = Image.open(BytesIO(img_bytes)).convert("L")
 
-  # Amplia um pouco a imagem para facilitar a leitura de fontes pequenas
+  # Como o print da notificação do C6 Bank tem fundo escuro e letras claras,
+  # inverter quando a média de brilho for baixa melhora muito a leitura do Tesseract.
+  stat_media = sum(pil_img.getdata()) / max(pil_img.width * pil_img.height, 1)
+  if stat_media < 128:
+    pil_img = ImageOps.invert(pil_img)
+
+  # Amplia a imagem para facilitar a leitura de fontes pequenas
   largura, altura = pil_img.size
-  if largura < 1200:
-    escala = 1200 / max(largura, 1)
+  if largura < 1400:
+    escala = 1400 / max(largura, 1)
     pil_img = pil_img.resize(
         (int(largura * escala), int(altura * escala)), Image.Resampling.LANCZOS
     )
 
-  ocr = obter_leitor_ocr()
-  resultado, _ = ocr(pil_img)
-
-  linhas_ocr = []
-  if resultado:
-    for item in resultado:
-      if len(item) >= 2 and item[1]:
-        linhas_ocr.append(str(item[1]).strip())
-
-  texto_completo = " ".join(linhas_ocr)
+  texto_completo = pytesseract.image_to_string(pil_img, lang="por")
   texto_normalizado = re.sub(r"\s+", " ", texto_completo).strip()
 
   # 1. Valor (ex.: R$ 213,16 ou 213,16)
@@ -122,7 +114,6 @@ def extrair_dados_print_notificacao(uploaded_file):
       "valor": valor_float,
       "descricao": local,
       "data": data_extraida,
-      "texto_lido": texto_normalizado,
   }
 
 
@@ -242,7 +233,7 @@ if menu == "➕ Despesas de Cartão":
         ZoneInfo("America/Sao_Paulo")
     ).strftime("%d/%m/%Y")
 
-  # Leitura opcional de print da notificação via OCR (sem chave de API)
+  # Leitura opcional de print da notificação via Tesseract OCR
   with st.expander("📸 Capturar dados do print da notificação", expanded=False):
     print_arquivo = st.file_uploader(
         "Envie o print da notificação do cartão",
