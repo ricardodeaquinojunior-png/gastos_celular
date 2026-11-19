@@ -1,11 +1,16 @@
 # -*- coding: utf-8 -*-
-from datetime import date, datetime, timedelta
-from dateutil.relativedelta import relativedelta
-from zoneinfo import ZoneInfo
 import calendar
+from datetime import date, datetime, timedelta
+import json
+import re
+import uuid
+from zoneinfo import ZoneInfo
+
+from dateutil.relativedelta import relativedelta
+from google import genai
+from google.genai import types
 import libsql
 import streamlit as st
-import uuid
 
 # Configuração da página para dispositivos móveis
 st.set_page_config(
@@ -56,6 +61,75 @@ def conectar_banco():
   return conn
 
 
+def obter_gemini_api_key():
+  try:
+    if "GEMINI_API_KEY" in st.secrets and st.secrets["GEMINI_API_KEY"]:
+      return st.secrets["GEMINI_API_KEY"]
+    if "gemini" in st.secrets and "api_key" in st.secrets["gemini"]:
+      return st.secrets["gemini"]["api_key"]
+  except Exception:
+    pass
+  return None
+
+
+def extrair_dados_print_notificacao(uploaded_file):
+  api_key = obter_gemini_api_key()
+  if not api_key:
+    raise RuntimeError(
+        "Chave GEMINI_API_KEY não encontrada em st.secrets."
+    )
+
+  img_bytes = uploaded_file.getvalue()
+  mime_type = uploaded_file.type or "image/png"
+
+  client = genai.Client(api_key=api_key)
+  prompt = """
+Analise este print de notificação de compra em cartão e extraia os dados.
+Responda APENAS com um JSON válido contendo exatamente estas chaves:
+{
+  "valor": 0.00,
+  "local": "",
+  "data": "DD/MM/AAAA"
+}
+
+Regras:
+- "valor": número decimal (float) usando ponto como separador decimal (ex: 213.16). Se não encontrar, use 0.0.
+- "local": apenas o nome do estabelecimento ou local da compra, sem horário e sem palavras extras como "em " ou ", foi aprovada.".
+- "data": data da compra no formato DD/MM/AAAA, se aparecer no texto. Se não aparecer, use "".
+"""
+
+  response = client.models.generate_content(
+      model="gemini-2.5-flash",
+      contents=[
+          types.Part.from_bytes(data=img_bytes, mime_type=mime_type),
+          prompt,
+      ],
+      config=types.GenerateContentConfig(
+          response_mime_type="application/json",
+          temperature=0.1,
+      ),
+  )
+
+  texto_resp = (response.text or "").strip()
+  match = re.search(r"\{.*\}", texto_resp, re.DOTALL)
+  json_str = match.group(0) if match else texto_resp
+  dados = json.loads(json_str)
+
+  try:
+    val_float = float(dados.get("valor") or 0.0)
+  except (TypeError, ValueError):
+    val_float = 0.0
+
+  local = str(dados.get("local") or "").strip()
+  data_extraida = str(dados.get("data") or "").strip()
+
+  return {
+      "valor": val_float,
+      "descricao": local,
+      "data": data_extraida,
+  }
+
+
 def carregar_cartoes():
   try:
     conn = conectar_banco()
@@ -103,7 +177,7 @@ def carregar_todas_subcategorias_com_categoria():
     res = cursor.fetchall()
     cursor.close()
     conn.close()
-    
+
     subs_lista = []
     if res:
       for row in res:
@@ -111,7 +185,7 @@ def carregar_todas_subcategorias_com_categoria():
             "id_sub": str(row[0]),
             "sub_desc": row[1],
             "id_cat": str(row[2]),
-            "cat_desc": row[3]
+            "cat_desc": row[3],
         })
     return subs_lista
   except Exception as e:
@@ -158,26 +232,75 @@ if menu == "➕ Despesas de Cartão":
     st.warning("Nenhum cartão encontrado. Verifique sua tabela de cartões.")
     st.stop()
 
-  # 1. Seleção do Cartão por Radio (bolinhas)
-  st.markdown("##### 💳 Selecione o Cartão")
-  lista_nomes_cartoes = list(cartoes_dict.keys())
-  cartao_selecionado = st.radio(
-      "Selecione o Cartão",
-      options=lista_nomes_cartoes,
-      index=lista_nomes_cartoes.index(cartao_principal) if cartao_principal in lista_nomes_cartoes else 0,
-      horizontal=True,
-      label_visibility="collapsed"
-  )
-
-  # 2. Campo de Valor com máscara de moeda progressiva
+  # Inicialização dos estados do formulário
   if "raw_valor" not in st.session_state:
     st.session_state.raw_valor = ""
   if "input_valor_formatado" not in st.session_state:
     st.session_state.input_valor_formatado = "R$ 0,00"
   if "valor_numerico" not in st.session_state:
     st.session_state.valor_numerico = 0.0
+  if "str_descricao" not in st.session_state:
+    st.session_state.str_descricao = ""
+  if "str_data_compra" not in st.session_state:
+    st.session_state.str_data_compra = datetime.now(
+        ZoneInfo("America/Sao_Paulo")
+    ).strftime("%d/%m/%Y")
 
+  # Leitura opcional de print da notificação
+  with st.expander("📸 Capturar dados do print da notificação", expanded=False):
+    print_arquivo = st.file_uploader(
+        "Envie o print da notificação do cartão",
+        type=["png", "jpg", "jpeg", "webp"],
+        key="uploader_print_notificacao",
+    )
+    if print_arquivo is not None:
+      if st.button("✨ Preencher campos pelo print", use_container_width=True):
+        try:
+          with st.spinner("Lendo print com inteligência artificial..."):
+            extraido = extrair_dados_print_notificacao(print_arquivo)
 
+          val_num = extraido["valor"]
+          if val_num > 0:
+            val_fmt = (
+                f"R$ {val_num:,.2f}"
+                .replace(",", "X")
+                .replace(".", ",")
+                .replace("X", ".")
+            )
+            st.session_state.valor_numerico = val_num
+            st.session_state.input_valor_formatado = val_fmt
+            st.session_state.raw_valor = val_fmt
+
+          if extraido["descricao"]:
+            st.session_state.str_descricao = extraido["descricao"]
+
+          if extraido["data"]:
+            try:
+              datetime.strptime(extraido["data"], "%d/%m/%Y")
+              st.session_state.str_data_compra = extraido["data"]
+            except ValueError:
+              pass
+
+          st.rerun()
+        except Exception as err:
+          st.error(f"Não foi possível ler o print: {err}")
+
+  # 1. Seleção do Cartão por Radio (bolinhas)
+  st.markdown("##### 💳 Selecione o Cartão")
+  lista_nomes_cartoes = list(cartoes_dict.keys())
+  cartao_selecionado = st.radio(
+      "Selecione o Cartão",
+      options=lista_nomes_cartoes,
+      index=(
+          lista_nomes_cartoes.index(cartao_principal)
+          if cartao_principal in lista_nomes_cartoes
+          else 0
+      ),
+      horizontal=True,
+      label_visibility="collapsed",
+  )
+
+  # 2. Campo de Valor com máscara de moeda progressiva
   def formatar_moeda_input():
     digitos = "".join(
         filter(str.isdigit, st.session_state.get("raw_valor", ""))
@@ -200,7 +323,6 @@ if menu == "➕ Despesas de Cartão":
     st.session_state.input_valor_formatado = formatado
     st.session_state.raw_valor = formatado
 
-
   st.text_input(
       "Valor da despesa cartão (R$)",
       value=st.session_state.input_valor_formatado,
@@ -211,7 +333,11 @@ if menu == "➕ Despesas de Cartão":
   valor = st.session_state.valor_numerico
 
   # 3. Campo Descrição
-  descricao = st.text_input("📝 Descrição", placeholder="Ex: Supermercado, Uber...")
+  descricao = st.text_input(
+      "📝 Descrição",
+      key="str_descricao",
+      placeholder="Ex: Supermercado, Uber...",
+  )
 
   # 4. Subcategorias em ordem alfabética e Categoria automática
   subs_lista = carregar_todas_subcategorias_com_categoria()
@@ -220,14 +346,16 @@ if menu == "➕ Despesas de Cartão":
   sub_selecionada = st.selectbox(
       "📂 Subcategoria",
       options=sub_opcoes,
-      placeholder="Selecione a subcategoria..."
+      placeholder="Selecione a subcategoria...",
   )
 
   id_cat = None
   id_sub = None
   cat_desc_exibicao = ""
   if sub_selecionada and subs_lista:
-    item_encontrado = next((i for i in subs_lista if i["sub_desc"] == sub_selecionada), None)
+    item_encontrado = next(
+        (i for i in subs_lista if i["sub_desc"] == sub_selecionada), None
+    )
     if item_encontrado:
       id_sub = item_encontrado["id_sub"]
       id_cat = item_encontrado["id_cat"]
@@ -236,21 +364,24 @@ if menu == "➕ Despesas de Cartão":
   st.text_input(
       "📂 Categoria (Preenchimento Automático)",
       value=cat_desc_exibicao,
-      disabled=True
+      disabled=True,
   )
 
   # 5. Data da compra
-  if "str_data_compra" not in st.session_state:
-    st.session_state.str_data_compra = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y")
-
   col_d1, col_d2 = st.columns(2)
   with col_d1:
     if st.button("📅 Hoje", use_container_width=True):
-      st.session_state.str_data_compra = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y")
+      st.session_state.str_data_compra = datetime.now(
+          ZoneInfo("America/Sao_Paulo")
+      ).strftime("%d/%m/%Y")
+      st.rerun()
   with col_d2:
     if st.button("↩️ Ontem", use_container_width=True):
-      ontem = datetime.now(ZoneInfo("America/Sao_Paulo")).date() - timedelta(days=1)
+      ontem = datetime.now(ZoneInfo("America/Sao_Paulo")).date() - timedelta(
+          days=1
+      )
       st.session_state.str_data_compra = ontem.strftime("%d/%m/%Y")
+      st.rerun()
 
   str_data_digitada = st.text_input(
       "Data da Compra (DD/MM/AAAA)",
@@ -292,7 +423,7 @@ if menu == "➕ Despesas de Cartão":
         conn = conectar_banco()
         cursor = conn.cursor()
         desc_base = descricao.strip()
-        
+
         fuso_br = ZoneInfo("America/Sao_Paulo")
         agora_ts = datetime.now(fuso_br).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -366,18 +497,26 @@ if menu == "➕ Despesas de Cartão":
     return f"{meses_pt.get(int(mes), mes)} de {ano}"
 
   mes_atual_str = hoje.strftime("%Y-%m")
-  indice_atual = lista_meses_opcoes.index(mes_atual_str) if mes_atual_str in lista_meses_opcoes else 3
+  indice_atual = (
+      lista_meses_opcoes.index(mes_atual_str)
+      if mes_atual_str in lista_meses_opcoes
+      else 3
+  )
 
   mes_resumo_sel = st.selectbox(
       "📅 Período de Referência (Mês)",
       options=lista_meses_opcoes,
       index=indice_atual,
       format_func=formatar_mes_pt,
-      key="resumo_mes_sel"
+      key="resumo_mes_sel",
   )
 
   opcoes_cartao_resumo = ["Todos os cartões"] + list(cartoes_dict.keys())
-  cartao_escolhido_resumo = st.selectbox("💳 Filtrar Cartão (Resumo)", options=opcoes_cartao_resumo, key="resumo_cartao_sel")
+  cartao_escolhido_resumo = st.selectbox(
+      "💳 Filtrar Cartão (Resumo)",
+      options=opcoes_cartao_resumo,
+      key="resumo_cartao_sel",
+  )
 
   try:
     conn = conectar_banco()
@@ -389,7 +528,7 @@ if menu == "➕ Despesas de Cartão":
         JOIN cartoes c ON l.id_cartao = c.id
         LEFT JOIN categorias cat ON l.id_categoria = cat.id_categoria
         LEFT JOIN subcategorias sub ON l.id_subcategoria = sub.id_subcategoria
-        WHERE l.id_cartao IS NOT NULL;
+        WHERE l.id_cartao IS NOT NULL AND (l.deletado_em IS NULL OR l.deletado_em = '');
     """)
     todos_lancamentos = cursor.fetchall()
     cursor.close()
@@ -416,23 +555,37 @@ if menu == "➕ Despesas de Cartão":
 
     if ciclo_ano_mes == mes_resumo_sel:
       if cnome not in totais_por_cartao:
-        totais_por_cartao[cnome] = {"total": 0.0, "inicio": inicio_ciclo, "fim": fim_ciclo}
+        totais_por_cartao[cnome] = {
+            "total": 0.0,
+            "inicio": inicio_ciclo,
+            "fim": fim_ciclo,
+        }
       totais_por_cartao[cnome]["total"] += float(val or 0)
 
-      if cartao_escolhido_resumo == "Todos os cartões" or cartao_escolhido_resumo == cnome:
+      if (
+          cartao_escolhido_resumo == "Todos os cartões"
+          or cartao_escolhido_resumo == cnome
+      ):
         lancamentos_filtrados.append({
             "valor": float(val or 0),
             "cat_desc": cat_desc or "Sem Categoria",
-            "sub_desc": sub_desc or "Sem Subcategoria"
+            "sub_desc": sub_desc or "Sem Subcategoria",
         })
 
   if cartao_escolhido_resumo == "Todos os cartões" and totais_por_cartao:
     st.markdown("#### 📊 Totais por Cartão no Período:")
     for cnome, info in totais_por_cartao.items():
-      p_inicio = info["inicio"].strftime('%d/%m/%Y')
-      p_fim = info["fim"].strftime('%d/%m/%Y')
-      val_cartao_fmt = f"R$ {info['total']:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-      st.markdown(f"- **{cnome}** (Período: {p_inicio} a {p_fim}): **{val_cartao_fmt}**")
+      p_inicio = info["inicio"].strftime("%d/%m/%Y")
+      p_fim = info["fim"].strftime("%d/%m/%Y")
+      val_cartao_fmt = (
+          f"R$ {info['total']:,.2f}"
+          .replace(",", "X")
+          .replace(".", ",")
+          .replace("X", ".")
+      )
+      st.markdown(
+          f"- **{cnome}** (Período: {p_inicio} a {p_fim}): **{val_cartao_fmt}**"
+      )
     st.divider()
 
   agregado = {}
@@ -454,28 +607,41 @@ if menu == "➕ Despesas de Cartão":
 
   if agregado:
     html_resumo = "<div style='font-family: sans-serif; font-size: 14px;'>"
-    
-    for c_desc, c_data in sorted(agregado.items(), key=lambda x: x[1]["total"], reverse=True):
-      cat_total_fmt = f"{c_data['total']:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-      
+
+    for c_desc, c_data in sorted(
+        agregado.items(), key=lambda x: x[1]["total"], reverse=True
+    ):
+      cat_total_fmt = (
+          f"{c_data['total']:,.2f}"
+          .replace(",", "X")
+          .replace(".", ",")
+          .replace("X", ".")
+      )
+
       html_resumo += f"""<div style="display: flex; justify-content: space-between; font-weight: bold; margin-top: 6px; margin-bottom: 2px;">
 <span>{c_desc}</span>
 <span>{cat_total_fmt}</span>
 </div>"""
-      
-      for s_desc, s_val in sorted(c_data["subs"].items(), key=lambda x: x[1], reverse=True):
-        sub_val_fmt = f"{s_val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+      for s_desc, s_val in sorted(
+          c_data["subs"].items(), key=lambda x: x[1], reverse=True
+      ):
+        sub_val_fmt = (
+            f"{s_val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        )
         html_resumo += f"""<div style="display: flex; justify-content: space-between; padding-left: 16px; font-size: 13px; margin-bottom: 2px; color: #444;">
 <span>{s_desc}</span>
 <span>{sub_val_fmt}</span>
 </div>"""
-      
+
       html_resumo += "<hr style='margin: 6px 0; border: none; border-top: 1px solid #e0e0e0;'>"
-    
+
     html_resumo += "</div>"
     st.markdown(html_resumo, unsafe_allow_html=True)
 
-    total_geral_fmt = f"{total_geral:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    total_geral_fmt = (
+        f"{total_geral:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    )
     st.markdown(f"### **Total Geral: {total_geral_fmt}**")
   else:
     st.info("Nenhuma despesa encontrada para este cartão/período.")
@@ -490,11 +656,9 @@ elif menu == "💳 Faturas dos Cartões":
     m_ref = hoje + relativedelta(months=i)
     lista_meses_opcoes.append(m_ref.strftime("%Y-%m"))
 
-
   def formatar_mes_pt(ano_mes):
     ano, mes = ano_mes.split("-")
     return f"{meses_pt.get(int(mes), mes)} de {ano}"
-
 
   mes_atual_str = hoje.strftime("%Y-%m")
   indice_atual = (
@@ -522,7 +686,7 @@ elif menu == "💳 Faturas dos Cartões":
                 SELECT l.valor, l.data_lancamento, l.descricao, c.nome, c.dia_fechamento 
                 FROM lancamentos l
                 JOIN cartoes c ON l.id_cartao = c.id
-                WHERE l.id_cartao IS NOT NULL;
+                WHERE l.id_cartao IS NOT NULL AND (l.deletado_em IS NULL OR l.deletado_em = '');
             """)
       todos_lanc_cartoes = cursor.fetchall()
       cursor.close()
@@ -531,7 +695,13 @@ elif menu == "💳 Faturas dos Cartões":
       faturas_por_cartao = {}
       if todos_lanc_cartoes:
         for row in todos_lanc_cartoes:
-          val, ldata, ldesc, c_nome, c_fech = row[0], row[1], row[2], row[3], row[4]
+          val, ldata, ldesc, c_nome, c_fech = (
+              row[0],
+              row[1],
+              row[2],
+              row[3],
+              row[4],
+          )
           if not ldata:
             continue
           if isinstance(ldata, str):
@@ -604,8 +774,10 @@ elif menu == "💳 Faturas dos Cartões":
 # ==========================================
 elif menu == "⚙️ Categorias e Subcategorias":
   st.markdown("### ⚙️ Gerenciamento de Categorias e Subcategorias")
-  
-  aba_cat, aba_sub = st.tabs(["📁 Gerenciar Categorias", "📂 Gerenciar Subcategorias"])
+
+  aba_cat, aba_sub = st.tabs(
+      ["📁 Gerenciar Categorias", "📂 Gerenciar Subcategorias"]
+  )
 
   fuso_br = ZoneInfo("America/Sao_Paulo")
   agora_ts = datetime.now(fuso_br).strftime("%Y-%m-%d %H:%M:%S")
@@ -613,8 +785,12 @@ elif menu == "⚙️ Categorias e Subcategorias":
   # --- GESTÃO DE CATEGORIAS ---
   with aba_cat:
     st.markdown("#### ➕ Nova Categoria")
-    nova_cat_desc = st.text_input("Descrição da Categoria", placeholder="Ex: Alimentação, Lazer...", key="input_nova_cat")
-    
+    nova_cat_desc = st.text_input(
+        "Descrição da Categoria",
+        placeholder="Ex: Alimentação, Lazer...",
+        key="input_nova_cat",
+    )
+
     if st.button("Cadastrar Categoria", type="primary"):
       if not nova_cat_desc.strip():
         st.error("Informe a descrição da categoria.")
@@ -625,7 +801,7 @@ elif menu == "⚙️ Categorias e Subcategorias":
           novo_id_cat = str(uuid.uuid4())
           cursor.execute(
               "INSERT INTO categorias (id_categoria, created_at, descricao, atualizado_em) VALUES (?, ?, ?, ?);",
-              (novo_id_cat, agora_ts, nova_cat_desc.strip(), agora_ts)
+              (novo_id_cat, agora_ts, nova_cat_desc.strip(), agora_ts),
           )
           conn.commit()
           cursor.close()
@@ -640,7 +816,9 @@ elif menu == "⚙️ Categorias e Subcategorias":
     try:
       conn = conectar_banco()
       cursor = conn.cursor()
-      cursor.execute("SELECT id_categoria, descricao FROM categorias ORDER BY descricao ASC;")
+      cursor.execute(
+          "SELECT id_categoria, descricao FROM categorias ORDER BY descricao ASC;"
+      )
       cats_db = cursor.fetchall()
       cursor.close()
       conn.close()
@@ -648,14 +826,19 @@ elif menu == "⚙️ Categorias e Subcategorias":
       if cats_db:
         for cid_cat, cdesc in cats_db:
           with st.expander(f"📁 {cdesc}"):
-            edit_cat_desc = st.text_input("Editar Descrição", value=cdesc, key=f"edit_cat_{cid_cat}")
+            edit_cat_desc = st.text_input(
+                "Editar Descrição", value=cdesc, key=f"edit_cat_{cid_cat}"
+            )
             col_e1, col_e2 = st.columns(2)
             with col_e1:
               if st.button("💾 Salvar Alteração", key=f"btn_salv_cat_{cid_cat}"):
                 try:
                   conn = conectar_banco()
                   cursor = conn.cursor()
-                  cursor.execute("UPDATE categorias SET descricao = ?, atualizado_em = ? WHERE id_categoria = ?;", (edit_cat_desc.strip(), agora_ts, cid_cat))
+                  cursor.execute(
+                      "UPDATE categorias SET descricao = ?, atualizado_em = ? WHERE id_categoria = ?;",
+                      (edit_cat_desc.strip(), agora_ts, cid_cat),
+                  )
                   conn.commit()
                   cursor.close()
                   conn.close()
@@ -664,18 +847,27 @@ elif menu == "⚙️ Categorias e Subcategorias":
                 except Exception as ex:
                   st.error(f"Erro ao atualizar: {ex}")
             with col_e2:
-              if st.button("🗑️ Excluir", key=f"btn_del_cat_{cid_cat}", type="secondary"):
+              if st.button(
+                  "🗑️ Excluir",
+                  key=f"btn_del_cat_{cid_cat}",
+                  type="secondary",
+              ):
                 try:
                   conn = conectar_banco()
                   cursor = conn.cursor()
-                  cursor.execute("DELETE FROM categorias WHERE id_categoria = ?;", (cid_cat,))
+                  cursor.execute(
+                      "DELETE FROM categorias WHERE id_categoria = ?;",
+                      (cid_cat,),
+                  )
                   conn.commit()
                   cursor.close()
                   conn.close()
                   st.success("Categoria excluída!")
                   st.rerun()
                 except Exception as ex:
-                  st.error(f"Erro ao excluir (verifique se há dependências): {ex}")
+                  st.error(
+                      f"Erro ao excluir (verifique se há dependências): {ex}"
+                  )
       else:
         st.info("Nenhuma categoria cadastrada.")
     except Exception as e:
@@ -684,11 +876,13 @@ elif menu == "⚙️ Categorias e Subcategorias":
   # --- GESTÃO DE SUBCATEGORIAS ---
   with aba_sub:
     st.markdown("#### ➕ Nova Subcategoria")
-    
+
     try:
       conn = conectar_banco()
       cursor = conn.cursor()
-      cursor.execute("SELECT id_categoria, descricao FROM categorias ORDER BY descricao ASC;")
+      cursor.execute(
+          "SELECT id_categoria, descricao FROM categorias ORDER BY descricao ASC;"
+      )
       lista_cats_select = cursor.fetchall()
       cursor.close()
       conn.close()
@@ -696,11 +890,21 @@ elif menu == "⚙️ Categorias e Subcategorias":
       lista_cats_select = []
 
     if not lista_cats_select:
-      st.warning("Cadastre ao menos uma categoria antes de gerenciar subcategorias.")
+      st.warning(
+          "Cadastre ao menos uma categoria antes de gerenciar subcategorias."
+      )
     else:
       cat_dict_map = {row[1]: row[0] for row in lista_cats_select}
-      cat_escolhida_para_sub = st.selectbox("Selecione a Categoria Pai", options=list(cat_dict_map.keys()), key="select_cat_pai")
-      nova_sub_desc = st.text_input("Descrição da Subcategoria", placeholder="Ex: Supermercado, Restaurante...", key="input_nova_sub")
+      cat_escolhida_para_sub = st.selectbox(
+          "Selecione a Categoria Pai",
+          options=list(cat_dict_map.keys()),
+          key="select_cat_pai",
+      )
+      nova_sub_desc = st.text_input(
+          "Descrição da Subcategoria",
+          placeholder="Ex: Supermercado, Restaurante...",
+          key="input_nova_sub",
+      )
 
       if st.button("Cadastrar Subcategoria", type="primary"):
         if not nova_sub_desc.strip():
@@ -713,7 +917,7 @@ elif menu == "⚙️ Categorias e Subcategorias":
             novo_id_sub = str(uuid.uuid4())
             cursor.execute(
                 "INSERT INTO subcategorias (id_subcategoria, created_at, descricao, id_categoria, atualizado_em) VALUES (?, ?, ?, ?, ?);",
-                (novo_id_sub, agora_ts, nova_sub_desc.strip(), id_cat_pai, agora_ts)
+                (novo_id_sub, agora_ts, nova_sub_desc.strip(), id_cat_pai, agora_ts),
             )
             conn.commit()
             cursor.close()
@@ -726,24 +930,29 @@ elif menu == "⚙️ Categorias e Subcategorias":
     st.divider()
     st.markdown("#### 📋 Subcategorias Cadastradas")
     subs_com_cat = carregar_todas_subcategorias_com_categoria()
-    
+
     if subs_com_cat:
       for item in subs_com_cat:
         sid = item["id_sub"]
         sdesc = item["sub_desc"]
         scat_desc = item["cat_desc"]
-        scat_id = item["id_cat"]
 
         with st.expander(f"📂 {sdesc} (Categoria: {scat_desc})"):
-          edit_sub_desc = st.text_input("Editar Descrição", value=sdesc, key=f"edit_sub_{sid}")
-          
+          edit_sub_desc = st.text_input(
+              "Editar Descrição", value=sdesc, key=f"edit_sub_{sid}"
+          )
+
           cat_opcoes_map = {row[1]: row[0] for row in lista_cats_select}
           cat_atual_nome = scat_desc
           nova_cat_pai_escolhida = st.selectbox(
-              "Alterar Categoria", 
-              options=list(cat_opcoes_map.keys()), 
-              index=list(cat_opcoes_map.keys()).index(cat_atual_nome) if cat_atual_nome in cat_opcoes_map else 0,
-              key=f"edit_sub_cat_{sid}"
+              "Alterar Categoria",
+              options=list(cat_opcoes_map.keys()),
+              index=(
+                  list(cat_opcoes_map.keys()).index(cat_atual_nome)
+                  if cat_atual_nome in cat_opcoes_map
+                  else 0
+              ),
+              key=f"edit_sub_cat_{sid}",
           )
           novo_id_cat_pai = cat_opcoes_map[nova_cat_pai_escolhida]
 
@@ -755,7 +964,7 @@ elif menu == "⚙️ Categorias e Subcategorias":
                 cursor = conn.cursor()
                 cursor.execute(
                     "UPDATE subcategorias SET descricao = ?, id_categoria = ?, atualizado_em = ? WHERE id_subcategoria = ?;",
-                    (edit_sub_desc.strip(), novo_id_cat_pai, agora_ts, sid)
+                    (edit_sub_desc.strip(), novo_id_cat_pai, agora_ts, sid),
                 )
                 conn.commit()
                 cursor.close()
@@ -765,11 +974,15 @@ elif menu == "⚙️ Categorias e Subcategorias":
               except Exception as ex:
                 st.error(f"Erro ao atualizar: {ex}")
           with col_s2:
-            if st.button("🗑️ Excluir", key=f"btn_del_sub_{sid}", type="secondary"):
+            if st.button(
+                "🗑️ Excluir", key=f"btn_del_sub_{sid}", type="secondary"
+            ):
               try:
                 conn = conectar_banco()
                 cursor = conn.cursor()
-                cursor.execute("DELETE FROM subcategorias WHERE id_subcategoria = ?;", (sid,))
+                cursor.execute(
+                    "DELETE FROM subcategorias WHERE id_subcategoria = ?;", (sid,)
+                )
                 conn.commit()
                 cursor.close()
                 conn.close()

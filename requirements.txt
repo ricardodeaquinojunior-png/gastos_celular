@@ -2,3 +2,5 @@ streamlit
 libsql
 python-dateutil
 matplotlib
+google-genai
+pillow
